@@ -63,7 +63,10 @@ tr:hover td{background:rgba(127,127,127,.06)}th{font-size:11px;text-transform:up
 .dh{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:16px 0 6px;font-weight:700}
 .ditem{display:flex;gap:10px;align-items:center;width:100%;text-align:left;margin-bottom:6px;font-weight:600}.ditem span{font-size:18px}
 .gear{font-size:20px;padding:6px 12px;line-height:1;flex-shrink:0}.tabs{display:flex;gap:6px;overflow-x:auto;flex:1;min-width:0}
-@media print{body *{visibility:hidden}.modal,.receipt,.receipt *{visibility:visible}.modal{position:absolute;background:none;padding:0;display:block}.receipt{border:0;max-width:100%;color:#000;background:#fff}.noprint{display:none!important}}
+.ld{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;flex-direction:column;gap:14px;align-items:center;justify-content:center;z-index:200;color:#fff;font-weight:600;animation:fi .15s}
+.spin{width:46px;height:46px;border:4px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}@keyframes fi{from{opacity:0}}
+@media print{.ld{display:none}body *{visibility:hidden}.modal,.receipt,.receipt *{visibility:visible}.modal{position:absolute;background:none;padding:0;display:block}.receipt{border:0;max-width:100%;color:#000;background:#fff}.noprint{display:none!important}}
 </style>
 </head>
 <body>
@@ -72,10 +75,17 @@ tr:hover td{background:rgba(127,127,127,.06)}th{font-size:11px;text-transform:up
 const K={c:'pos2_co',u:'pos2_users',s:'pos2_session',g:'pos2_cats',p:'pos2_prods',l:'pos2_sales'};
 const load=(k,d)=>{try{const v=JSON.parse(localStorage.getItem(k));return v==null?d:v}catch(e){return d}};
 let token='';try{token=localStorage.getItem('pos3_token')||''}catch(e){}
-async function api(m,p,b){const r=await fetch((window.POS_API||'')+p,{method:m,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:b?JSON.stringify(b):undefined});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Request failed');return j}
+let nb=0;
+function busy(on,m){nb=Math.max(0,nb+(on?1:-1));let e=document.getElementById('ld');
+  if(nb>0&&!e){e=document.createElement('div');e.id='ld';e.className='ld';e.innerHTML='<div class="spin"></div><div id="ldt"></div>';document.body.appendChild(e)}
+  if(e&&on)document.getElementById('ldt').textContent=m==='GET'?'Loading…':'Saving…';
+  if(nb===0&&e)e.remove()}
+async function api(m,p,b,quiet){if(!quiet)busy(true,m);
+  try{const r=await fetch((window.POS_API||'')+p,{method:m,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:b?JSON.stringify(b):undefined});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Request failed');return j}
+  finally{if(!quiet)busy(false)}}
 const ROUTE={[K.g]:'cats',[K.p]:'prods',[K.l]:'sales'};
 const save=(k,v)=>{if(ROUTE[k])api('PUT','/api/'+ROUTE[k],v).catch(e=>toast(e.message));else try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
-async function boot(){const r=await api('GET','/api/data');cos=[r.company];users=r.users;cats=r.cats;prods=r.prods;sales=r.sales;session=r.me}
+async function boot(q){const r=await api('GET','/api/data',null,q);cos=[r.company];users=r.users;cats=r.cats;prods=r.prods;sales=r.sales;session=r.me}
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=n=>(n<0?'-':'')+'$'+Math.abs(Number(n)).toFixed(2);
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
@@ -256,7 +266,7 @@ document.addEventListener('input',e=>{const t=e.target;if(t.dataset.input!=='q')
 applyTheme();
 render();
 if(token)boot().then(render).catch(()=>{token='';try{localStorage.removeItem('pos3_token')}catch(e){}render()});
-setInterval(()=>{if(token&&U&&!md&&!rc&&!dr&&!document.querySelector('.cfm')&&!['INPUT','SELECT'].includes(document.activeElement.tagName))boot().then(render).catch(()=>{})},30000);
+setInterval(()=>{if(token&&U&&!md&&!rc&&!dr&&!document.querySelector('.cfm')&&!['INPUT','SELECT'].includes(document.activeElement.tagName))boot(true).then(render).catch(()=>{})},30000);
 </script>
 </body>
 </html>
