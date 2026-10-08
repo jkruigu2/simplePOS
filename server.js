@@ -36,6 +36,13 @@ const replaceAll = (Mo, co, a) => Mo.bulkWrite([
   { deleteMany: { filter: { co, id: { $nin: a.map(x => x.id) } } } },
   ...a.map(x => ({ replaceOne: { filter: { co, id: x.id }, replacement: x, upsert: true } }))]);
 
+// ---------- health check ----------
+app.get('/api/health', wrap(async (q, s) => {
+  if (mongoose.connection.readyState !== 1) fail(503, 'Database not connected');
+  await mongoose.connection.db.admin().ping();
+  s.json({ server: 'ok', database: 'connected' });
+}));
+
 // ---------- auth ----------
 app.post('/api/register', wrap(async (q, s) => {
   const d = q.body, code = String(d.code || '').trim().toUpperCase(), user = String(d.user || '').trim().toLowerCase();
