@@ -101,7 +101,7 @@ app.delete('/api/users/:id', auth, need('admin'), wrap(async (q, s) => {
   await User.deleteOne({ co: q.u.co, id: q.params.id }); s.json({ ok: 1 });
 }));
 
-module.exports = app;   // used by the Netlify function
+module.exports = app;   //used by the Netlify function
 
 if (require.main === module) {   // normal `npm start` (Render, Railway, local)
   if (!SECRET || !process.env.MONGODB_URI) { console.error('Set MONGODB_URI and JWT_SECRET in .env'); process.exit(1); }
