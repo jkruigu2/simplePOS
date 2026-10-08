@@ -10,5 +10,5 @@ exports.handler = async (event, context) => {
   context.callbackWaitsForEmptyEventLoop = false;
   await connect();
   event.path = event.path.replace(/^\/\.netlify\/functions\/api/, '/api');
-  return run(event, context);
+  return run(event,context);
 };
