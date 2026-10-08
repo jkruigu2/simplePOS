@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express'), mongoose = require('mongoose'), bcrypt = require('bcryptjs'),
       jwt = require('jsonwebtoken'), path = require('path');
 const SECRET = process.env.JWT_SECRET;
-if (!SECRET || !process.env.MONGODB_URI) { console.error('Set MONGODB_URI and JWT_SECRET in .env'); process.exit(1); }
 
 const app = express();
 app.use(express.json({ limit: '5mb' }));
@@ -95,6 +94,11 @@ app.delete('/api/users/:id', auth, need('admin'), wrap(async (q, s) => {
   await User.deleteOne({ co: q.u.co, id: q.params.id }); s.json({ ok: 1 });
 }));
 
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => app.listen(process.env.PORT || 3000, () => console.log('POS running on port ' + (process.env.PORT || 3000))))
-  .catch(e => { console.error(e.message); process.exit(1); });
+module.exports = app;   // used by the Netlify function
+
+if (require.main === module) {   // normal `npm start` (Render, Railway, local)
+  if (!SECRET || !process.env.MONGODB_URI) { console.error('Set MONGODB_URI and JWT_SECRET in .env'); process.exit(1); }
+  mongoose.connect(process.env.MONGODB_URI)
+    .then(() => app.listen(process.env.PORT || 3000, () => console.log('POS running on port ' + (process.env.PORT || 3000))))
+    .catch(e => { console.error(e.message); process.exit(1); });
+}
