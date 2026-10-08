@@ -71,6 +71,7 @@ tr:hover td{background:rgba(127,127,127,.06)}th{font-size:11px;text-transform:up
 .ld{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;flex-direction:column;gap:14px;align-items:center;justify-content:center;z-index:200;color:#fff;font-weight:600;animation:fi .15s}
 .spin{width:46px;height:46px;border:4px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:sp .8s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}@keyframes fi{from{opacity:0}}
+.prow{display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap}.prow select{width:135px;margin:0}.prow input{flex:1;min-width:90px;margin:0}
 @media print{.ld{display:none}body *{visibility:hidden}.modal,.receipt,.receipt *{visibility:visible}.modal{position:absolute;background:none;padding:0;display:block}.receipt{border:0;max-width:100%;color:#000;background:#fff}.noprint{display:none!important}}
 </style>
 </head>
@@ -104,10 +105,13 @@ function toast(m,type){type=type||(/not |cannot|fail|invalid|only |less than|exi
 const PERM={admin:['sell','products','stock','report','users'],manager:['sell','products','stock','report'],cashier:['sell','stock']};
 const TABS={sell:'Sell',products:'Products',stock:'Stock',report:'Reports',users:'Users'};
 let cos=[],users=[],cats=[],prods=[],sales=[];
-let session=null,mode='login',err='',tab='sell',cart=[],filt='',from='',to='',wk=0,rc=null,U=null,C=null,q='',pg={},ps=10,md=null,mdx=null,pay='Cash',paid='',cust={name:'',phone:'',note:''};
+let session=null,mode='login',err='',tab='sell',cart=[],filt='',from='',to='',wk=0,rc=null,U=null,C=null,q='',pg={},ps=10,md=null,mdx=null,pays=[{m:'Cash',amt:'',ref:''}],pay='Cash',paid='',cust={name:'',phone:'',note:''};
 const mine=a=>a.filter(x=>x.co===C.code);
 const can=p=>PERM[U.role].includes(p);
 const PAY=[['Cash','💵'],['Mobile Money','📱'],['Card','💳'],['Bank','🏦']];
+const cartTotal=()=>cart.reduce((x,c)=>x+c.price*c.qty,0);
+function balText(){const t=cartTotal(),s=pays.reduce((x,p)=>x+(+p.amt||0),0);if(pays.length===1&&!s)return '';const b=t-s;return b>0.004?'Remaining '+money(b):b<-0.004?'Change '+money(-b):'Fully paid'}
+function payParts(s){if(!s.pays)return [[s.pay||'Cash',s.total]];let ch=s.change||0;return s.pays.map(p=>{let a=p.amt;if(p.m==='Cash'&&ch>0){const d=Math.min(ch,a);a-=d;ch-=d}return [p.m,a]})}
 function addCart(p,n=1){const l=cart.find(x=>x.id===p.id),have=l?l.qty:0;if(have+n>p.stock){toast('Only '+p.stock+' of '+p.name+' in stock','warn');return false}l?l.qty+=n:cart.push({id:p.id,qty:n,price:p.price});toast('Added '+p.name,'ok');return true}
 const catName=id=>(cats.find(c=>c.id===id)||{name:'—'}).name;
 const hueOf=id=>{const c=cats.find(x=>x.id===id);if(!c)return 220;if(c.hue!=null)return c.hue;let h=0;for(const ch of c.id)h=(h*31+ch.charCodeAt(0))%360;return h};
@@ -163,8 +167,9 @@ function sellView(){
   return `<div class="card"><h2>Cart${lines.length?' ('+lines.reduce((a,c)=>a+c.qty,0)+' items)':''}</h2>
   <div class="row" style="margin-bottom:10px"><input id="qn" list="pl" placeholder="Type a product to add…" autocomplete="off" style="flex:1;margin:0"><input id="qq" type="number" min="1" value="1" style="width:70px;margin:0"><button class="pri" data-act="qadd">Add</button></div><datalist id="pl">${avail.map(p=>`<option value="${esc(p.name)}"></option>`).join('')}</datalist>
   ${lines.length?`<div class="tblw"><table><tr><th>Item</th><th>Qty</th><th>Price</th><th class="r">Total</th></tr>${lines.map(c=>`<tr class="cr" style="--h:${hueOf(c.p.cat)}"><td>${esc(c.p.name)}</td><td><div class="qty"><button data-act="dec" data-id="${c.id}">−</button><input type="number" min="0" max="${c.p.stock}" value="${c.qty}" data-change="cq" data-id="${c.id}"><button data-act="add" data-id="${c.id}">+</button></div></td><td><input type="number" min="0" step="0.01" value="${c.price}" data-change="cp" data-id="${c.id}"></td><td class="r">${money(c.price*c.qty)}</td></tr>`).join('')}</table></div>
-  <div class="dh">Payment method</div><div class="chips">${PAY.map(m=>`<button class="chip ${pay===m[0]?'on':''}" data-act="pay" data-id="${m[0]}">${m[1]} ${m[0]}</button>`).join('')}</div>
-  ${pay==='Cash'?`<input id="paid" type="number" min="0" step="0.01" placeholder="Amount received (optional)" value="${esc(paid)}" data-change="paid">`:''}
+  <div class="dh">Payment${pays.length>1?' (split)':''}</div>
+  ${pays.map((p,i)=>`<div class="prow"><select data-change="pm" data-i="${i}">${PAY.map(m=>`<option ${p.m===m[0]?'selected':''}>${m[0]}</option>`).join('')}</select><input type="number" min="0" step="0.01" placeholder="${pays.length>1?'Amount':'Amount (blank = full)'}" value="${esc(p.amt)}" data-input="pa" data-i="${i}">${p.m!=='Cash'?`<input placeholder="Txn code (optional)" value="${esc(p.ref)}" data-input="pr" data-i="${i}">`:''}${pays.length>1?`<button class="del" data-act="rmpay" data-id="${i}">✕</button>`:''}</div>`).join('')}
+  <div class="row" style="margin-bottom:8px"><button data-act="addpay">+ Split payment</button><small id="bal" class="low">${balText()}</small></div>
   <div class="dh">Customer (optional)</div><div class="row" style="gap:8px;margin-bottom:8px"><input id="cn" placeholder="Name" value="${esc(cust.name)}" data-change="cu" data-f="name"><input id="cp" type="tel" placeholder="Telephone" value="${esc(cust.phone)}" data-change="cu" data-f="phone"></div><input id="cnt" placeholder="Notes" value="${esc(cust.note)}" data-change="cu" data-f="note">
   <div class="row" style="margin-top:6px;flex-wrap:wrap"><button data-act="clear">Clear</button><div><b>Total </b><b style="font-size:22px">${money(total)}</b></div><button class="pri" data-act="checkout">Checkout &amp; receipt</button></div>`:'<p class="mut">Cart is empty. Type a product above or pick one below.</p>'}</div>
   <div class="card"><input id="q" data-input="q" type="search" placeholder="🔍 Search products…" value="${esc(q)}">
@@ -196,14 +201,14 @@ function reportView(){
   const t=sum(all.filter(s=>day(s.ts)===today)),r=sum(list);
   const days=[];for(let i=6;i>=0;i--){const dt=new Date();dt.setDate(dt.getDate()-i-7*wk);const d=day(dt),x=sum(all.filter(s=>day(s.ts)===d));days.push({d,...x})}
   const w=sum(days.map(d=>({total:d.rev,profit:d.profit})));
-  const pb={};list.forEach(s=>{const k=s.pay||'Cash';pb[k]=(pb[k]||0)+s.total});const byDay={};list.forEach(s=>{const d=day(s.ts),o=byDay[d]||(byDay[d]={n:0,rev:0,profit:0});o.n++;o.rev+=s.total;o.profit+=s.profit});
+  const pb={};list.forEach(s=>payParts(s).forEach(([k,v])=>{pb[k]=(pb[k]||0)+v}));const byDay={};list.forEach(s=>{const d=day(s.ts),o=byDay[d]||(byDay[d]={n:0,rev:0,profit:0});o.n++;o.rev+=s.total;o.profit+=s.profit});
   return `<div class="card"><div class="stats"><div class="stat"><span class="mut">Today's sales</span><b>${money(t.rev)}</b></div><div class="stat"><span class="mut">Today's profit</span><b class="${t.profit<0?'neg':'pos'}">${money(t.profit)}</b></div><div class="stat"><span class="mut">Week revenue</span><b>${money(w.rev)}</b></div><div class="stat"><span class="mut">Week profit</span><b class="${w.profit<0?'neg':'pos'}">${money(w.profit)}</b></div></div></div>
   <div class="card"><div class="row"><h2 style="margin:0">Weekly sales graph</h2><div><button data-act="wk" data-id="1">‹</button> <button data-act="wk" data-id="-1" ${wk<1?'disabled':''}>›</button></div></div>
   <small class="mut">${days[0].d} to ${days[6].d} · <span style="color:var(--pri)">■</span> sales <span style="color:var(--ok)">■</span> profit</small>${chart(days)}</div>
   <div class="card"><div class="row"><div style="flex:1"><label>From</label><input type="date" data-change="from" value="${from}" style="margin:0"></div><div style="flex:1"><label>To</label><input type="date" data-change="to" value="${to}" style="margin:0"></div></div>
   <p class="mut">In range: ${list.length} sales · revenue ${money(r.rev)} · profit <b class="${r.profit<0?'neg':'pos'}">${money(r.profit)}</b></p><p class="mut">${Object.entries(pb).map(([k,v])=>k+' '+money(v)).join(' · ')}</p></div>
   <div class="grid half"><div class="card"><h2>Daily profit</h2><div class="tblw">${Object.keys(byDay).length?`<table><tr><th>Date</th><th class="r">Sales</th><th class="r">Revenue</th><th class="r">Profit</th></tr>${Object.keys(byDay).sort().reverse().map(d=>{const o=byDay[d];return `<tr><td>${d}</td><td class="r">${o.n}</td><td class="r">${money(o.rev)}</td><td class="r ${o.profit<0?'neg':'pos'}">${money(o.profit)}</td></tr>`}).join('')}</table>`:'<p class="mut">No sales in range.</p>'}</div></div>
-  <div class="card"><h2>Transactions</h2><div class="tblw">${list.length?`<table><tr><th>#</th><th>Date</th><th>Cashier</th><th>Customer</th><th>Pay</th><th class="r">Total</th><th></th></tr>${list.map(s=>`<tr><td>${s.no}</td><td>${new Date(s.ts).toLocaleString()}</td><td>${esc(s.by)}</td><td>${s.cust?esc((s.cust.name||'')+(s.cust.phone?' · '+s.cust.phone:''))+(s.cust.note?'<br><small class="mut">'+esc(s.cust.note)+'</small>':''):''}</td><td>${esc(s.pay||'Cash')}</td><td class="r">${money(s.total)}</td><td><button data-act="rcpt" data-id="${s.id}">Receipt</button></td></tr>`).join('')}</table>`:'<p class="mut">No sales in range.</p>'}</div></div></div>`;
+  <div class="card"><h2>Transactions</h2><div class="tblw">${list.length?`<table><tr><th>#</th><th>Date</th><th>Cashier</th><th>Customer</th><th>Pay</th><th class="r">Total</th><th></th></tr>${list.map(s=>`<tr><td>${s.no}</td><td>${new Date(s.ts).toLocaleString()}</td><td>${esc(s.by)}</td><td>${s.cust?esc((s.cust.name||'')+(s.cust.phone?' · '+s.cust.phone:''))+(s.cust.note?'<br><small class="mut">'+esc(s.cust.note)+'</small>':''):''}</td><td>${esc(s.pay||'Cash')}${(s.pays||[]).some(p=>p.ref)?'<br><small class="mut">'+esc(s.pays.filter(p=>p.ref).map(p=>p.ref).join(', '))+'</small>':''}</td><td class="r">${money(s.total)}</td><td><button data-act="rcpt" data-id="${s.id}">Receipt</button></td></tr>`).join('')}</table>`:'<p class="mut">No sales in range.</p>'}</div></div></div>`;
 }
 function userView(){
   const L=mine(users),a=pager('user',L.length);
@@ -222,7 +227,7 @@ function receiptModal(){
   return `<div class="modal"><div><div class="card receipt"><div class="ctr"><b style="font-size:15px">${esc(C.name)}</b><br>${esc(C.loc)}<br>Tel: ${esc(C.phone)}</div><hr>
   Receipt #${String(s.no).padStart(5,'0')}<br>${new Date(s.ts).toLocaleString()}<br>Cashier: ${esc(s.by)}<br>Payment: ${esc(s.pay||'Cash')}${s.cust?`${s.cust.name?'<br>Customer: '+esc(s.cust.name):''}${s.cust.phone?'<br>Tel: '+esc(s.cust.phone):''}${s.cust.note?'<br>Note: '+esc(s.cust.note):''}`:''}<hr>
   <table>${s.items.map(i=>`<tr><td style="border:0;white-space:normal">${i.qty} × ${esc(i.name)}<br><span class="mut">@ ${money(i.price)}</span></td><td class="r" style="border:0">${money(i.qty*i.price)}</td></tr>`).join('')}</table><hr>
-  <div class="row"><b>TOTAL</b><b>${money(s.total)}</b></div>${s.paid!=null?`<div class="row"><span>Received</span><span>${money(s.paid)}</span></div><div class="row"><span>Change</span><span>${money(s.change)}</span></div>`:''}<hr><div class="ctr"><i>${esc(C.motto)}</i><br>Thank you!</div></div>
+  <div class="row"><b>TOTAL</b><b>${money(s.total)}</b></div>${s.pays?s.pays.map(p=>`<div class="row"><span>${esc(p.m)}${p.ref?' #'+esc(p.ref):''}</span><span>${money(p.amt)}</span></div>`).join('')+(s.change>0?`<div class="row"><span>Change</span><span>${money(s.change)}</span></div>`:''):''}<hr><div class="ctr"><i>${esc(C.motto)}</i><br>Thank you!</div></div>
   <div class="row noprint"><button data-act="closer">Close</button><button class="pri" data-act="print">🖨 Print receipt</button></div></div></div>`;
 }
 
@@ -241,6 +246,7 @@ document.addEventListener('submit',async e=>{
 document.addEventListener('change',e=>{
   const t=e.target,c=t.dataset.change,id=t.dataset.id;if(!c)return;
   if(c==='paid'){paid=t.value;return}
+  if(c==='pm'){const p=pays[+t.dataset.i];if(p)p.m=t.value}
   if(c==='cu'){cust[t.dataset.f]=t.value;return}
   if(c==='cq'){const l=cart.find(x=>x.id===id),p=prods.find(x=>x.id===id);if(l&&p){let v=parseInt(t.value)||0;if(v>p.stock){v=p.stock;toast('Only '+p.stock+' in stock','warn')}if(v<1)cart=cart.filter(x=>x!==l);else l.qty=v}}
   if(c==='filt'){filt=t.value;pg.sell=1}if(c==='ps'){ps=+t.value;pg={}}if(c==='from')from=t.value;if(c==='to')to=t.value;
@@ -259,7 +265,8 @@ document.addEventListener('click',e=>{
   if(!U&&a!=='mode')return;
   if(a==='logout')return ask('Log out now?',()=>{dr=false;session=null;cart=[];rc=null;try{localStorage.removeItem('pos3_token');token='';cos=[];users=[];cats=[];prods=[];sales=[]}catch(x){}});
   if(a==='filt'){filt=id;pg.sell=1}
-  if(a==='pay')pay=id;
+  if(a==='addpay'){const u=pays.map(p=>p.m),n=PAY.map(m=>m[0]).find(m=>!u.includes(m))||'Cash';pays.push({m:n,amt:'',ref:''})}
+  if(a==='rmpay')pays.splice(+id,1);
   if(a==='qadd'){const nm=($('#qn').value||'').trim().toLowerCase(),qty=Math.max(1,parseInt($('#qq').value)||1),av=mine(prods).filter(x=>x.stock>0);
     let p=av.find(x=>x.name.toLowerCase()===nm);if(!p&&nm){const m=av.filter(x=>x.name.toLowerCase().includes(nm));if(m.length===1)p=m[0]}
     if(p)addCart(p,qty);else toast(nm?'No in-stock product matches that name':'Type a product name first','warn')}
@@ -269,18 +276,24 @@ document.addEventListener('click',e=>{
   if(a==='rcpt')rc=id;
   if(a==='add'){const p=prods.find(x=>x.id===id);if(p)addCart(p)}
   if(a==='dec'){const l=cart.find(x=>x.id===id);if(l&&--l.qty<1)cart=cart.filter(x=>x!==l)}
-  if(a==='clear')return ask('Clear all items from the cart?',()=>{cart=[];paid='';cust={name:'',phone:'',note:''};toast('Cart cleared')});
+  if(a==='clear')return ask('Clear all items from the cart?',()=>{cart=[];paid='';pays=[{m:'Cash',amt:'',ref:''}];cust={name:'',phone:'',note:''};toast('Cart cleared')});
   if(a==='checkout'){if(!cart.length)return toast('Cart is empty','warn');
-    const tot=cart.reduce((x,c)=>x+c.price*c.qty,0),pv=$('#paid'),tn=pay==='Cash'&&pv&&pv.value!==''?+pv.value:null,gv=i=>($(i)||{value:''}).value.trim(),cu={name:gv('#cn'),phone:gv('#cp'),note:gv('#cnt')};
-    if(tn!==null&&tn<tot)return toast('Amount received is less than the total','warn');
-    return ask('Complete this '+pay+' sale of '+money(tot)+'?',()=>{
+    const tot=cartTotal(),gv=i=>($(i)||{value:''}).value.trim(),cu={name:gv('#cn'),phone:gv('#cp'),note:gv('#cnt')};
+    let pp=pays.map(p=>({m:p.m,amt:+p.amt||0,ref:(p.ref||'').trim()}));
+    if(pp.length===1&&!pp[0].amt)pp[0].amt=tot;
+    const sum=pp.reduce((x,p)=>x+p.amt,0),cash=pp.filter(p=>p.m==='Cash').reduce((x,p)=>x+p.amt,0);
+    if(sum<tot-0.004)return toast('Payments are short by '+money(tot-sum),'warn');
+    const chg=Math.max(0,sum-tot);
+    if(chg>cash+0.004)return toast('Card, mobile and bank payments cannot exceed the total','warn');
+    pp=pp.filter(p=>p.amt>0);
+    return ask('Complete this '+(pp.length>1?'split-payment':pp[0].m)+' sale of '+money(tot)+'?',()=>{
       const items=[];let total=0,profit=0;
       for(const c of cart){const p=prods.find(x=>x.id===c.id);if(!p||p.stock<c.qty){toast('Insufficient stock: '+(p?p.name:'item'),'warn');return}
         items.push({id:p.id,name:p.name,price:c.price,buy:p.buy,qty:c.qty});total+=c.price*c.qty;profit+=(c.price-p.buy)*c.qty}
       if(!items.length)return;
       items.forEach(i=>{prods.find(p=>p.id===i.id).stock-=i.qty});
-      const s={id:uid(),co:C.code,no:mine(sales).length+1,ts:Date.now(),by:U.name,items,total,profit,pay,paid:tn,change:tn!==null?tn-total:null,cust:(cu.name||cu.phone||cu.note)?cu:null};
-      sales.push(s);save(K.p,prods);save(K.l,sales);cart=[];rc=s.id;paid='';cust={name:'',phone:'',note:''};toast('Sale completed: '+money(total)+' ('+pay+')');
+      const s={id:uid(),co:C.code,no:mine(sales).length+1,ts:Date.now(),by:U.name,items,total,profit,pay:pp.length>1?'Split':pp[0].m,pays:pp,paid:sum,change:chg,cust:(cu.name||cu.phone||cu.note)?cu:null};
+      sales.push(s);save(K.p,prods);save(K.l,sales);cart=[];rc=s.id;paid='';pays=[{m:'Cash',amt:'',ref:''}];cust={name:'',phone:'',note:''};toast('Sale completed: '+money(total)+' ('+s.pay+')');
       const low=items.map(i=>prods.find(p=>p.id===i.id)).filter(p=>p.stock<=5);
       if(low.length)setTimeout(()=>toast('Low stock: '+low.map(p=>p.name+' ('+p.stock+')').join(', '),'warn'),700);
     });}
@@ -289,7 +302,9 @@ document.addEventListener('click',e=>{
   if(a==='deluser'&&can('users')&&id!==U.id)return ask('Delete this user?',async()=>{await api('DELETE','/api/users/'+id);users=users.filter(u=>u.id!==id);toast('User deleted')});
   render();
 });
-document.addEventListener('input',e=>{const t=e.target;if(t.dataset.input!=='q')return;q=t.value;pg.sell=1;const p=t.selectionStart;render();const n=$('#q');if(n){n.focus();n.setSelectionRange(p,p)}});
+document.addEventListener('input',e=>{const t=e.target,k=t.dataset.input;
+  if(k==='pa'||k==='pr'){const p=pays[+t.dataset.i];if(p){p[k==='pa'?'amt':'ref']=t.value;if(k==='pa'){const b=$('#bal');if(b)b.textContent=balText()}}return}
+  if(k!=='q')return;q=t.value;pg.sell=1;const p=t.selectionStart;render();const n=$('#q');if(n){n.focus();n.setSelectionRange(p,p)}});
 document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='qn'){e.preventDefault();const b=document.querySelector('[data-act=qadd]');if(b)b.click()}});
 applyTheme();
 render();
