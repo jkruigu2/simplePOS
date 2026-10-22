@@ -1,0 +1,17 @@
+# Render Blueprint: deploys the same app as a backup to Netlify.
+services:
+  - type: web
+    name: pos-backup
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: MONGODB_URI
+        sync: false        # you will be asked for this when you create the service
+      - key: JWT_SECRET
+        sync: false
+      - key: NODE_VERSION
+        value: 20
