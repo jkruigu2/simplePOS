@@ -4,75 +4,84 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Simple POS</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
-:root{--bg:#f5f6f8;--card:#fff;--tx:#1b1f27;--mut:#6b7380;--bd:#e1e4ea;--pri:#2563eb;--pritx:#fff;--ok:#16a34a;--bad:#dc2626;--warn:#d97706;--tl:92%;--tt:28%;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#13161b;--card:#1c2027;--tx:#e8eaee;--mut:#98a0ad;--bd:#2d333d;--pri:#4f8bff;--pritx:#0b1020;--tl:24%;--tt:82%}}
-:root[data-theme="dark"]{--tl:24%;--tt:82%;--bg:#13161b;--card:#1c2027;--tx:#e8eaee;--mut:#98a0ad;--bd:#2d333d;--pri:#4f8bff;--pritx:#0b1020}
+:root{--bg:#f1f4f6;--card:#fff;--tx:#0f1b2d;--mut:#5d6b7c;--bd:#dde3e9;--pri:#0e7c66;--pri2:#0a6552;--pritx:#fff;--soft:#e6f4f0;--ok:#0e7c66;--bad:#c0392b;--warn:#b7791f;--tl:92%;--tt:28%;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0b1216;--card:#121c22;--tx:#e6edf1;--mut:#8ea0ad;--bd:#233039;--pri:#2fbf9b;--pri2:#26a588;--pritx:#06201a;--soft:#12332c;--ok:#2fbf9b;--bad:#f0776a;--warn:#e0b04a;--tl:22%;--tt:82%}}
+:root[data-theme="dark"]{--bg:#0b1216;--card:#121c22;--tx:#e6edf1;--mut:#8ea0ad;--bd:#233039;--pri:#2fbf9b;--pri2:#26a588;--pritx:#06201a;--soft:#12332c;--ok:#2fbf9b;--bad:#f0776a;--warn:#e0b04a;--tl:22%;--tt:82%}
 *{box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}
-body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-.wrap{max-width:1000px;margin:0 auto;padding:12px}
-header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0}
-h1{font-size:18px;margin:0}h2{font-size:16px;margin:0 0 10px}
-nav{display:flex;gap:6px;overflow-x:auto;margin-bottom:12px}nav button{white-space:nowrap}
-.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:12px}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1040px;margin:0 auto;padding:0 14px 104px}
+h1{font-size:18px;margin:0;font-weight:600}h2{font-size:16px;margin:0 0 12px;font-weight:600}
+nav{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:8px;background:var(--card);border-bottom:1px solid var(--bd);margin:0 -14px 14px;padding:0 10px 0 14px}
+.tabs{display:flex;gap:2px;overflow-x:auto;flex:1;min-width:0}
+nav button{height:50px;padding:0 14px;border:0;border-bottom:3px solid transparent;border-radius:0;background:none;color:var(--mut);font-weight:500;white-space:nowrap}
+nav button:hover:not(:disabled){background:none;border-color:transparent;border-bottom-color:var(--bd);color:var(--tx)}
+nav button.act{color:var(--pri);border-bottom-color:var(--pri);background:none}
+nav .gear{height:40px;width:40px;padding:0;border:1px solid var(--bd);border-radius:8px;font-size:18px;color:var(--tx);background:var(--card);flex-shrink:0}
+nav .gear:hover:not(:disabled){background:var(--soft);border-color:var(--pri)}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:16px;margin-bottom:12px}
+.cart{border-top:3px solid var(--pri)}#tot{font-size:28px;font-weight:600}
 .grid{display:grid;gap:12px;grid-template-columns:1fr}
 @media(min-width:760px){.grid.two{grid-template-columns:1.3fr 1fr}.grid.half{grid-template-columns:1fr 1fr}}
-input,select,button{font:inherit;color:inherit}
-input,select{width:100%;padding:9px 10px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);margin-bottom:8px}
-button{padding:8px 14px;border:1px solid var(--bd);border-radius:8px;background:var(--card);cursor:pointer}
-button.pri,button.act{background:var(--pri);color:var(--pritx);border-color:var(--pri)}
-button.del{color:var(--bad)}
 .row{display:flex;gap:8px;align-items:center;justify-content:space-between}.row>*{margin-bottom:0}
-.prods{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
-.prod{text-align:left;padding:10px;display:block;width:100%}.prod b{display:block}.prod small{color:var(--mut)}.prod:disabled{opacity:.45;cursor:not-allowed}
-.tblw{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:14px}
-th,td{text-align:left;padding:6px;border-bottom:1px solid var(--bd);white-space:nowrap}th{color:var(--mut);font-weight:600}
-td input,td select{margin:0;padding:5px 6px;width:84px}
+button{font:inherit;height:38px;padding:0 14px;border:1px solid var(--bd);border-radius:8px;background:var(--card);color:var(--tx);font-weight:500;cursor:pointer;transition:background .12s,border-color .12s}
+button:hover:not(:disabled){background:var(--soft);border-color:var(--pri)}
+button.pri{background:var(--pri);border-color:var(--pri);color:var(--pritx)}
+button.pri:hover:not(:disabled){background:var(--pri2);border-color:var(--pri2)}
+button.act{background:var(--pri);border-color:var(--pri);color:var(--pritx)}
+button.del{color:var(--bad)}button.del:hover:not(:disabled){background:rgba(192,57,43,.08);border-color:var(--bad)}
+button:disabled{opacity:.4;cursor:not-allowed}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--pri);outline-offset:1px}
+td button{height:30px;padding:0 10px;font-size:13px}.qty button{height:30px;padding:0 10px}
+input,select{font:inherit;color:inherit;width:100%;height:42px;padding:0 12px;border:1px solid var(--bd);border-radius:8px;background:var(--card);margin-bottom:8px}
+input[type=checkbox]{width:auto;height:auto}
+td input,td select{height:34px;margin:0;padding:0 8px;width:88px}
+label{font-size:13px;color:var(--mut);font-weight:500}
+.tblw{overflow-x:auto;border:1px solid var(--bd);border-radius:8px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--bd);white-space:nowrap}
+th{color:var(--mut);font-weight:600;font-size:13px;background:var(--bg)}
+tbody tr:last-child td,tr:last-child>td{border-bottom:0}
+tr:hover>td{background:var(--soft)}
+tfoot td{font-weight:600;border-top:2px solid var(--bd);border-bottom:0;background:var(--bg)}
 .r{text-align:right}.mut{color:var(--mut)}.low{color:var(--warn);font-weight:600}.out,.neg{color:var(--bad);font-weight:600}.pos{color:var(--ok);font-weight:600}
-.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:8px}@media(min-width:600px){.stats{grid-template-columns:repeat(4,1fr)}}
-.stat{background:var(--bg);border-radius:10px;padding:10px}.stat b{display:block;font-size:18px}
-.auth{max-width:400px;margin:5vh auto 0}.err{color:var(--bad);min-height:20px;font-size:14px}
-.toasts{position:fixed;left:0;right:0;bottom:calc(88px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;align-items:center;gap:8px;z-index:150;pointer-events:none}
-.toast{background:var(--card);color:var(--tx);border:1px solid var(--bd);border-left:5px solid var(--ok);padding:10px 16px;border-radius:12px;font-size:14px;box-shadow:0 6px 20px rgba(0,0,0,.25);animation:tin .2s;max-width:90vw}
-.toast span{margin-right:8px;font-weight:700;color:var(--ok)}
-.t-warn{border-left-color:var(--warn)}.t-warn span{color:var(--warn)}.t-err{border-left-color:var(--bad)}.t-err span{color:var(--bad)}
-@keyframes tin{from{opacity:0;transform:translateY(10px)}}
-.qty input{width:56px;text-align:center;padding:4px}
-label{font-size:13px;color:var(--mut)}.qty{display:flex;gap:6px;align-items:center}.qty button{padding:2px 9px}
-.modal,.cfm{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:20px 12px;z-index:50}
-.receipt{width:100%;max-width:340px;font-family:ui-monospace,Menlo,monospace;font-size:13px}.receipt hr{border:0;border-top:1px dashed var(--mut)}.ctr{text-align:center}
-svg text{fill:var(--mut);font-size:9px}svg .b1{fill:var(--pri)}svg .b2{fill:var(--ok)}
-
-.wrap{padding-bottom:96px}
-nav{position:sticky;top:0;z-index:30;background:var(--bg);padding:6px 0;margin:0 0 10px}
-nav button{border-radius:999px;font-weight:600}
-.card{box-shadow:0 1px 2px rgba(0,0,0,.04),0 6px 18px rgba(0,0,0,.05)}
-button{transition:.15s}button:hover:not(:disabled){filter:brightness(.95);transform:translateY(-1px)}button:disabled{opacity:.45;cursor:not-allowed}
-input:focus,select:focus{outline:2px solid var(--pri);border-color:transparent}
-tr:hover td{background:rgba(127,127,127,.06)}th{font-size:11px;text-transform:uppercase;letter-spacing:.05em}
-.tag{display:inline-block;background:hsl(var(--h) 65% var(--tl));color:hsl(var(--h) 70% var(--tt));border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600}
-.cr td:first-child{border-left:4px solid hsl(var(--h) 65% 50%);padding-left:10px}
+.tblw>p{padding:14px;margin:0}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--bd);border:1px solid var(--bd);border-radius:10px;overflow:hidden}
+@media(min-width:600px){.stats{grid-template-columns:repeat(4,1fr)}}
+.stat{background:var(--card);padding:12px 14px}.stat span{font-size:13px}.stat b{display:block;font-size:22px;font-weight:600}
+.tag{display:inline-block;background:hsl(var(--h) 55% var(--tl));color:hsl(var(--h) 60% var(--tt));border-radius:6px;padding:2px 9px;font-size:12.5px;font-weight:600}
+.cr td:first-child{border-left:4px solid hsl(var(--h) 60% 48%);padding-left:10px}
 .chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:10px}
-.chip{border-radius:999px;padding:5px 13px;white-space:nowrap;font-size:13px;font-weight:600;border:1px solid hsl(var(--h,220) 60% 55%/.45);background:hsl(var(--h,220) 65% var(--tl));color:hsl(var(--h,220) 70% var(--tt))}
-.chip.on{background:hsl(var(--h,220) 65% 48%);color:#fff;border-color:transparent}
-.bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 14px calc(10px + env(safe-area-inset-bottom,0px));z-index:40;box-shadow:0 -4px 16px rgba(0,0,0,.07)}
-.badge{background:var(--pri);color:var(--pritx);border-radius:6px;padding:1px 7px;font-size:11px;text-transform:uppercase;font-weight:700;margin-left:4px}
-.logo{width:54px;height:54px;border-radius:15px;background:var(--pri);display:grid;place-items:center;font-size:26px;margin:0 auto 8px}
-.stat{border-left:4px solid var(--pri)}.stat:nth-child(2n){border-left-color:var(--ok)}
-.auth{margin-top:6vh}
-
-.drbg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60;display:flex;justify-content:flex-end}
-.drawer{width:310px;max-width:86vw;height:100%;background:var(--card);padding:16px;padding-top:calc(16px + env(safe-area-inset-top,0px));padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));overflow-y:auto;box-shadow:-8px 0 30px rgba(0,0,0,.25);animation:slin .2s ease-out}
-@keyframes slin{from{transform:translateX(100%)}}
-.dcard{background:var(--bg);border-radius:12px;padding:12px}
-.dh{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:16px 0 6px;font-weight:700}
-.ditem{display:flex;gap:10px;align-items:center;width:100%;text-align:left;margin-bottom:6px;font-weight:600}.ditem span{font-size:18px}
-.gear{font-size:20px;padding:6px 12px;line-height:1;flex-shrink:0}.tabs{display:flex;gap:6px;overflow-x:auto;flex:1;min-width:0}
-.ld{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;flex-direction:column;gap:14px;align-items:center;justify-content:center;z-index:200;color:#fff;font-weight:600;animation:fi .15s}
-.spin{width:46px;height:46px;border:4px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:sp .8s linear infinite}
-@keyframes sp{to{transform:rotate(360deg)}}@keyframes fi{from{opacity:0}}
+.chip{height:34px;padding:0 13px;border-radius:8px;white-space:nowrap;font-size:13.5px;border:1px solid hsl(var(--h,200) 40% 60%/.5);background:hsl(var(--h,200) 50% var(--tl));color:hsl(var(--h,200) 60% var(--tt))}
+.chip.on{background:hsl(var(--h,200) 55% 36%);color:#fff;border-color:transparent}
+.badge{background:var(--soft);color:var(--pri);border-radius:4px;padding:1px 7px;font-size:12px;font-weight:600;margin-left:6px}
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));z-index:40}
+.logo{width:52px;height:52px;border-radius:12px;background:var(--pri);display:grid;place-items:center;font-size:26px;margin:0 auto 10px}
+.auth{max-width:420px;margin:8vh auto 0;padding:24px}.ctr{text-align:center}.err{color:var(--bad);min-height:20px;font-size:14px}
 .prow{display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap}.prow select{width:135px;margin:0}.prow input{flex:1;min-width:90px;margin:0}
-@media print{.ld{display:none}body *{visibility:hidden}.modal,.receipt,.receipt *{visibility:visible}.modal{position:absolute;background:none;padding:0;display:block}.receipt{border:0;max-width:100%;color:#000;background:#fff}.noprint{display:none!important}}
+.qty{display:flex;gap:6px;align-items:center}.qty input{width:58px;text-align:center;padding:0 4px;height:30px}
+.dh{font-size:13px;font-weight:600;color:var(--mut);margin:16px 0 6px}
+.modal,.cfm{position:fixed;inset:0;background:rgba(10,20,30,.55);display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:20px 12px;z-index:50}
+.modal>.card,.cfm>.card{box-shadow:0 20px 50px rgba(0,0,0,.3);border-radius:12px;animation:pop .14s ease-out}
+@keyframes pop{from{opacity:0;transform:scale(.97)}}
+.receipt{width:100%;max-width:340px;font-family:ui-monospace,Menlo,monospace;font-size:13px;background:#fff;color:#111;border-color:#e5e7eb}
+.receipt hr{border:0;border-top:1px dashed #999}.receipt .mut{color:#666}.receipt tr:hover>td{background:none}
+.drbg{position:fixed;inset:0;background:rgba(10,20,30,.5);z-index:60;display:flex;justify-content:flex-end}
+.drawer{width:310px;max-width:86vw;height:100%;background:var(--card);border-left:1px solid var(--bd);padding:16px;padding-top:calc(16px + env(safe-area-inset-top,0px));padding-bottom:calc(16px + env(safe-area-inset-bottom,0px));overflow-y:auto;box-shadow:-8px 0 30px rgba(0,0,0,.2);animation:slin .18s ease-out}
+@keyframes slin{from{transform:translateX(100%)}}
+.dcard{background:var(--soft);border-radius:10px;padding:12px}
+.ditem{display:flex;gap:10px;align-items:center;width:100%;height:44px;text-align:left;margin-bottom:6px}.ditem span{font-size:18px}
+.toasts{position:fixed;left:0;right:0;bottom:calc(88px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;align-items:center;gap:8px;z-index:150;pointer-events:none}
+.toast{background:var(--card);color:var(--tx);border:1px solid var(--bd);padding:10px 16px;border-radius:10px;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.2);animation:tin .18s;max-width:90vw}
+.toast span{margin-right:8px;font-weight:700;color:var(--ok)}.t-warn span{color:var(--warn)}.t-err span{color:var(--bad)}
+@keyframes tin{from{opacity:0;transform:translateY(8px)}}
+.ld{position:fixed;inset:0;background:rgba(10,20,30,.5);display:flex;flex-direction:column;gap:14px;align-items:center;justify-content:center;z-index:200;color:#fff;font-weight:600}
+.spin{width:44px;height:44px;border:4px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+svg text{fill:var(--mut);font-size:9px}svg .b1{fill:var(--pri)}svg .b2{fill:var(--warn)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media print{body *{visibility:hidden}.modal,.receipt,.receipt *{visibility:visible}.modal{position:absolute;background:none;padding:0;display:block}.receipt{border:0;max-width:100%;box-shadow:none}.noprint{display:none!important}.ld{display:none}}
 </style>
 </head>
 <body>
@@ -87,7 +96,7 @@ function busy(on,m){nb=Math.max(0,nb+(on?1:-1));let e=document.getElementById('l
   if(e&&on)document.getElementById('ldt').textContent=m==='GET'?'Loading…':'Saving…';
   if(nb===0&&e)e.remove()}
 async function api(m,p,b,quiet){if(!quiet)busy(true,m);
-  try{const r=await fetch((window.POS_API||'')+p,{method:m,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:b?JSON.stringify(b):undefined});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Request failed');return j}
+  try{const r=await fetch((window.POS_API||'')+p,{method:m,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:b?JSON.stringify(b):undefined});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||(r.status===404||r.status===405?'Server is missing this feature - deploy the latest server.js':'Request failed ('+r.status+')'));return j}
   finally{if(!quiet)busy(false)}}
 const ROUTE={[K.g]:'cats',[K.p]:'prods',[K.l]:'sales'};
 const save=(k,v)=>{if(ROUTE[k])api('PUT','/api/'+ROUTE[k],k===K.l?v.slice(-1):v).catch(e=>toast(e.message));else try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
@@ -167,11 +176,11 @@ function pager(key,n){
 }
 function sellView(){
   const lines=cart.map(c=>({...c,p:prods.find(p=>p.id===c.id)})).filter(c=>c.p);
-  const total=lines.reduce((a,c)=>a+c.price*c.qty,0),n=q.trim().toLowerCase();
+  const total=lines.reduce((a,c)=>a+c.price*c.qty,0),n=q.trim().toLowerCase(),tm=n.split(/\s+/).filter(Boolean);
   const avail=mine(prods).filter(p=>p.stock>0);
-  const list=avail.filter(p=>(!filt||p.cat===filt)&&(!n||(p.name+' '+catName(p.cat)).toLowerCase().includes(n)));
+  const list=avail.filter(p=>(!filt||p.cat===filt)&&tm.every(w=>(p.name+' '+catName(p.cat)).toLowerCase().includes(w)));
   const pr=pager('sell',list.length);
-  return `<div class="card"><h2>Cart${lines.length?' ('+lines.reduce((a,c)=>a+c.qty,0)+' items)':''}</h2>
+  return `<div class="card cart"><h2>Cart${lines.length?' ('+lines.reduce((a,c)=>a+c.qty,0)+' items)':''}</h2>
   <div class="row" style="margin-bottom:10px"><input id="qn" list="pl" placeholder="Type a product to add…" autocomplete="off" style="flex:1;margin:0"><input id="qq" type="number" min="1" value="1" style="width:70px;margin:0"><button class="pri" data-act="qadd">Add</button></div><datalist id="pl">${avail.map(p=>`<option value="${esc(dn(p))}"></option>`).join('')}</datalist>
   ${lines.length?`<div class="tblw"><table><tr><th>Item</th><th>Qty</th><th>Price</th><th class="r">Total</th></tr>${lines.map(c=>`<tr class="cr" style="--h:${hueOf(c.p.cat)}"><td>${esc(dn(c.p))}</td><td><div class="qty"><button data-act="dec" data-id="${c.id}">−</button><input type="number" min="0" max="${c.p.stock}" value="${c.qty}" data-change="cq" data-id="${c.id}"><button data-act="add" data-id="${c.id}">+</button></div></td><td><input type="number" min="0" step="0.01" value="${c.price}" data-change="cp" data-id="${c.id}"></td><td class="r">${money(c.price*c.qty)}</td></tr>`).join('')}</table></div>
   <div class="row" style="margin-top:8px"><span>Subtotal <b>${money(total)}</b></span><label style="display:flex;align-items:center;color:var(--tx);font-size:14px"><input type="checkbox" data-act="dtoggle" ${disc.on?'checked':''} style="width:auto;margin:0 8px 0 0">Discount = unpaid balance</label></div>
@@ -181,19 +190,18 @@ function sellView(){
   <div class="row" style="margin-bottom:8px"><button data-act="addpay">+ Split payment</button><small id="bal" class="low">${balText()}</small></div>
   <div class="dh">Customer (optional)</div><div class="row" style="gap:8px;margin-bottom:8px"><input id="cn" placeholder="Name" value="${esc(cust.name)}" data-change="cu" data-f="name"><input id="cp" type="tel" placeholder="Telephone" value="${esc(cust.phone)}" data-change="cu" data-f="phone"></div><input id="cnt" placeholder="Notes" value="${esc(cust.note)}" data-change="cu" data-f="note">
   <div class="row" style="margin-top:6px;flex-wrap:wrap"><button data-act="clear">Clear</button><div><b>Total </b><b id="tot" style="font-size:22px">${money(cartTotal())}</b></div><button class="pri" data-act="checkout">Checkout &amp; receipt</button></div>`:'<p class="mut">Cart is empty. Type a product above or pick one below.</p>'}</div>
-  <div class="card"><input id="q" data-input="q" type="search" placeholder="🔍 Search products…" value="${esc(q)}">
+  <div class="card"><input id="q" data-input="q" type="search" placeholder="🔍 Search by product or category name…" value="${esc(q)}">
   <div class="chips"><button class="chip ${!filt?'on':''}" data-act="filt" data-id="">All</button>${mine(cats).map(c=>`<button class="chip ${filt===c.id?'on':''}" style="--h:${hueOf(c.id)}" data-act="filt" data-id="${c.id}">${esc(tc(c.name))}</button>`).join('')}</div>
   <div class="tblw">${list.length?`<table><tr><th>Product</th><th class="r">Price</th><th></th></tr>${list.slice(pr.a,pr.b).map(p=>`<tr class="cr" style="--h:${hueOf(p.cat)}"><td>${esc(dn(p))}</td><td class="r">${money(p.price)}</td><td class="r"><button class="pri" data-act="add" data-id="${p.id}">Add</button></td></tr>`).join('')}</table>`:'<p class="mut">No products in stock match.</p>'}</div>${pr.html}</div>`;
 }
 function prodView(){
   const P=mine(prods),G=mine(cats),a=pager('cat',G.length);
   return `<div class="card row" style="flex-wrap:wrap"><h2 style="margin:0">Categories &amp; products</h2><div><button class="pri" data-act="open" data-id="cat">+ Category</button> <button class="pri" data-act="open" data-id="prod" ${G.length?'':'disabled'}>+ Product</button></div></div>
-  ${G.length?G.slice(a.a,a.b).map(c=>{const L=P.filter(p=>p.cat===c.id);return `<div class="card"><div class="row" style="margin-bottom:8px;flex-wrap:wrap">${catTag(c.id)}<span class="mut">${L.length} product${L.length===1?'':'s'}</span><span><button data-act="open" data-id="prod" data-x="${c.id}">+ Product</button> <button class="del" data-act="delcat" data-id="${c.id}">Delete</button></span></div>
-  ${L.length?`<div class="tblw"><table><tr><th>Product</th><th>Buy</th><th>Sell</th><th class="r">Stock</th><th></th></tr>${L.map(p=>`<tr class="cr" style="--h:${hueOf(c.id)}"><td>${esc(tc(p.name))}</td><td><input type="number" min="0" step="0.01" value="${p.buy}" data-change="pe" data-f="buy" data-id="${p.id}"></td><td><input type="number" min="0" step="0.01" value="${p.price}" data-change="pe" data-f="price" data-id="${p.id}"></td><td class="r ${p.stock<1?'out':p.stock<=5?'low':''}">${p.stock}</td><td class="r"><button class="del" data-act="delprod" data-id="${p.id}">Delete</button></td></tr>`).join('')}</table></div>`:'<p class="mut">No products in this category yet.</p>'}</div>`}).join('')+a.html:'<div class="card"><p class="mut">No categories yet. Add one to get started.</p></div>'}`;
+  <div class="card"><div class="tblw">${G.length?`<table><tr><th>Category</th><th class="r">Products</th><th></th></tr>${G.slice(a.a,a.b).map(c=>{const n=P.filter(p=>p.cat===c.id).length;return `<tr class="cr" style="--h:${hueOf(c.id)}"><td>${catTag(c.id)}</td><td class="r">${n}</td><td class="r" style="white-space:nowrap"><button class="pri" data-act="open" data-id="cprods" data-x="${c.id}">View products</button> <button data-act="open" data-id="prod" data-x="${c.id}">+ Product</button> <button class="del" data-act="delcat" data-id="${c.id}">Delete</button></td></tr>`}).join('')}</table>`:'<p class="mut">No categories yet. Add one to get started.</p>'}</div>${G.length?a.html:''}</div>`;
 }
 function stockView(){
   const P=mine(prods),a=pager('stock',P.length);
-  return `<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Stock levels</h2><button class="pri" data-act="open" data-id="stock" ${P.length?'':'disabled'}>+ Add stock</button></div><div class="tblw">${P.length?`<table><tr><th>Product</th><th>Category</th><th class="r">Stock</th><th></th></tr>${P.slice(a.a,a.b).map(p=>`<tr><td>${esc(tc(p.name))}</td><td>${catTag(p.cat)}</td><td class="r ${p.stock<1?'out':p.stock<=5?'low':''}">${p.stock}</td><td class="r"><button data-act="open" data-id="stock" data-x="${p.id}">+ Stock</button></td></tr>`).join('')}</table>`:'<p class="mut">No products yet.</p>'}</div>${a.html}</div>`;
+  return `<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Stock levels</h2><button class="pri" data-act="open" data-id="stock" ${P.length?'':'disabled'}>+ Add stock</button></div><div class="tblw">${P.length?`<table><tr><th>Product</th><th class="r">Stock</th><th></th></tr>${P.slice(a.a,a.b).map(p=>`<tr class="cr" style="--h:${hueOf(p.cat)}"><td>${esc(dn(p))}</td><td class="r ${p.stock<1?'out':p.stock<=5?'low':''}">${p.stock}</td><td class="r"><button data-act="open" data-id="stock" data-x="${p.id}">+ Stock</button></td></tr>`).join('')}</table>`:'<p class="mut">No products yet.</p>'}</div>${a.html}</div>`;
 }
 function chart(days){
   const W=340,H=170,pad=8,top=22,mx=Math.max(1,...days.map(d=>d.rev)),g=(W-pad*2)/days.length,bw=13,h=H-top-24;
@@ -210,14 +218,21 @@ function reportView(){
   const t=sum(all.filter(s=>day(s.ts)===today)),r=sum(list);
   const days=[];for(let i=6;i>=0;i--){const dt=new Date();dt.setDate(dt.getDate()-i-7*wk);const d=day(dt),x=sum(all.filter(s=>day(s.ts)===d));days.push({d,...x})}
   const w=sum(days.map(d=>({total:d.rev,profit:d.profit})));
-  const pb={};list.forEach(s=>payParts(s).forEach(([k,v])=>{pb[k]=(pb[k]||0)+v}));const byDay={};list.forEach(s=>{const d=day(s.ts),o=byDay[d]||(byDay[d]={n:0,rev:0,profit:0});o.n++;o.rev+=s.total;o.profit+=s.profit});
+  const pb={};list.forEach(s=>payParts(s).forEach(([k,v])=>{pb[k]=(pb[k]||0)+v}));
+  const byDay={};list.forEach(s=>{const d=day(s.ts),o=byDay[d]||(byDay[d]={n:0,rev:0,profit:0});o.n++;o.rev+=s.total;o.profit+=s.profit});
+  const dk=Object.keys(byDay).sort().reverse(),dp=pager('dp',dk.length),tx=pager('tx',list.length);
+  const items=list.reduce((x,s)=>x+s.items.reduce((y,i)=>y+i.qty,0),0),disc=list.reduce((x,s)=>x+(s.disc||0),0),sub=list.reduce((x,s)=>x+(s.sub||s.total),0);
+  const pc=v=>`<span class="${v<0?'neg':'pos'}">${money(v)}</span>`;
   return `<div class="card"><div class="stats"><div class="stat"><span class="mut">Today's sales</span><b>${money(t.rev)}</b></div><div class="stat"><span class="mut">Today's profit</span><b class="${t.profit<0?'neg':'pos'}">${money(t.profit)}</b></div><div class="stat"><span class="mut">Week revenue</span><b>${money(w.rev)}</b></div><div class="stat"><span class="mut">Week profit</span><b class="${w.profit<0?'neg':'pos'}">${money(w.profit)}</b></div></div></div>
   <div class="card"><div class="row"><h2 style="margin:0">Weekly sales graph</h2><div><button data-act="wk" data-id="1">‹</button> <button data-act="wk" data-id="-1" ${wk<1?'disabled':''}>›</button></div></div>
   <small class="mut">${days[0].d} to ${days[6].d} · <span style="color:var(--pri)">■</span> sales <span style="color:var(--ok)">■</span> profit</small>${chart(days)}</div>
-  <div class="card"><div class="row"><div style="flex:1"><label>From</label><input type="date" data-change="from" value="${from}" style="margin:0"></div><div style="flex:1"><label>To</label><input type="date" data-change="to" value="${to}" style="margin:0"></div></div>
-  <p class="mut">In range: ${list.length} sales · revenue ${money(r.rev)} · profit <b class="${r.profit<0?'neg':'pos'}">${money(r.profit)}</b></p><p class="mut">${list.some(s=>s.disc>0)?'Discounts given '+money(list.reduce((x,s)=>x+(s.disc||0),0))+' · ':''}${Object.entries(pb).map(([k,v])=>k+' '+money(v)).join(' · ')}</p></div>
-  <div class="grid half"><div class="card"><h2>Daily profit</h2><div class="tblw">${Object.keys(byDay).length?`<table><tr><th>Date</th><th class="r">Sales</th><th class="r">Revenue</th><th class="r">Profit</th></tr>${Object.keys(byDay).sort().reverse().map(d=>{const o=byDay[d];return `<tr><td>${d}</td><td class="r">${o.n}</td><td class="r">${money(o.rev)}</td><td class="r ${o.profit<0?'neg':'pos'}">${money(o.profit)}</td></tr>`}).join('')}</table>`:'<p class="mut">No sales in range.</p>'}</div></div>
-  <div class="card"><h2>Transactions</h2><div class="tblw">${list.length?`<table><tr><th>#</th><th>Date</th><th>Cashier</th><th>Customer</th><th>Pay</th><th class="r">Total</th><th></th></tr>${list.map(s=>`<tr><td>${s.no}</td><td>${new Date(s.ts).toLocaleString()}</td><td>${esc(s.by)}</td><td>${s.cust?esc((s.cust.name||'')+(s.cust.phone?' · '+s.cust.phone:''))+(s.cust.note?'<br><small class="mut">'+esc(s.cust.note)+'</small>':''):''}</td><td>${esc(s.pay||'Cash')}${(s.pays||[]).some(p=>p.ref)?'<br><small class="mut">'+esc(s.pays.filter(p=>p.ref).map(p=>p.ref).join(', '))+'</small>':''}</td><td class="r">${money(s.total)}</td><td style="white-space:nowrap"><button data-act="rcpt" data-id="${s.id}">Receipt</button> <button data-act="open" data-id="sdate" data-x="${s.id}">Date</button> <button class="del" data-act="delrcpt" data-id="${s.id}">Delete</button></td></tr>`).join('')}</table>`:'<p class="mut">No sales in range.</p>'}</div></div></div>`;
+  <div class="card"><h2>Report period</h2><div class="row"><div style="flex:1"><label>From</label><input type="date" data-change="from" value="${from}" style="margin:0"></div><div style="flex:1"><label>To</label><input type="date" data-change="to" value="${to}" style="margin:0"></div></div></div>
+  <div class="grid half"><div class="card"><h2>Summary</h2><div class="tblw"><table><tr><th>Item</th><th class="r">Value</th></tr>
+   <tr><td>Sales</td><td class="r">${list.length}</td></tr><tr><td>Items sold</td><td class="r">${items}</td></tr><tr><td>Subtotal</td><td class="r">${money(sub)}</td></tr><tr><td>Discounts given</td><td class="r">-${money(disc)}</td></tr>
+   <tr><td>Revenue</td><td class="r">${money(r.rev)}</td></tr><tr><td>Cost of goods</td><td class="r">${money(r.rev-r.profit)}</td></tr><tfoot><tr><td>Profit</td><td class="r">${pc(r.profit)}</td></tr></tfoot></table></div></div>
+  <div class="card"><h2>Payment methods</h2><div class="tblw">${Object.keys(pb).length?`<table><tr><th>Method</th><th class="r">Amount</th></tr>${Object.entries(pb).map(([k,v])=>`<tr><td>${esc(k)}</td><td class="r">${money(v)}</td></tr>`).join('')}<tfoot><tr><td>Total</td><td class="r">${money(Object.values(pb).reduce((x,v)=>x+v,0))}</td></tr></tfoot></table>`:'<p class="mut">No sales in range.</p>'}</div></div></div>
+  <div class="card"><h2>Daily profit</h2><div class="tblw">${dk.length?`<table><tr><th>Date</th><th class="r">Sales</th><th class="r">Revenue</th><th class="r">Cost</th><th class="r">Profit</th></tr>${dk.slice(dp.a,dp.b).map(d=>{const o=byDay[d];return `<tr><td>${d}</td><td class="r">${o.n}</td><td class="r">${money(o.rev)}</td><td class="r">${money(o.rev-o.profit)}</td><td class="r">${pc(o.profit)}</td></tr>`}).join('')}<tfoot><tr><td>All days</td><td class="r">${list.length}</td><td class="r">${money(r.rev)}</td><td class="r">${money(r.rev-r.profit)}</td><td class="r">${pc(r.profit)}</td></tr></tfoot></table>`:'<p class="mut">No sales in range.</p>'}</div>${dk.length?dp.html:''}</div>
+  <div class="card"><h2>Transactions</h2><div class="tblw">${list.length?`<table><tr><th>#</th><th>Date</th><th>Customer</th><th>Cashier</th><th>Payment</th><th class="r">Items</th><th class="r">Discount</th><th class="r">Total</th><th class="r">Profit</th><th></th></tr>${list.slice(tx.a,tx.b).map(s=>`<tr><td>${s.no}</td><td>${new Date(s.ts).toLocaleString()}</td><td>${s.cust?esc((s.cust.name||'')+(s.cust.phone?' · '+s.cust.phone:''))+(s.cust.note?'<br><small class="mut">'+esc(s.cust.note)+'</small>':''):'—'}</td><td>${esc(s.by)}</td><td>${esc(s.pay||'Cash')}${(s.pays||[]).some(p=>p.ref)?'<br><small class="mut">'+esc(s.pays.filter(p=>p.ref).map(p=>p.ref).join(', '))+'</small>':''}</td><td class="r">${s.items.reduce((x,i)=>x+i.qty,0)}</td><td class="r">${s.disc>0?'-'+money(s.disc):'—'}</td><td class="r">${money(s.total)}</td><td class="r">${pc(s.profit)}</td><td style="white-space:nowrap"><button data-act="rcpt" data-id="${s.id}">Receipt</button> <button data-act="open" data-id="sdate" data-x="${s.id}">Date</button> <button class="del" data-act="delrcpt" data-id="${s.id}">Delete</button></td></tr>`).join('')}<tfoot><tr><td colspan="5">Total (${list.length} sales)</td><td class="r">${items}</td><td class="r">${disc>0?'-'+money(disc):'—'}</td><td class="r">${money(r.rev)}</td><td class="r">${pc(r.profit)}</td><td></td></tr></tfoot></table>`:'<p class="mut">No sales in range.</p>'}</div>${list.length?tx.html:''}</div>`;
 }
 function userView(){
   const L=mine(users),a=pager('user',L.length);
@@ -225,9 +240,13 @@ function userView(){
 }
 function mdView(){
   const G=mine(cats),P=mine(prods);let t,b;
+  if(md==='cprods'){const c=G.find(x=>x.id===mdx);if(!c)return '';const L=P.filter(p=>p.cat===c.id);
+    return `<div class="modal"><div class="card" style="width:100%;max-width:640px"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">${catTag(c.id)} <span class="mut" style="font-size:14px">${L.length} product${L.length===1?'':'s'}</span></h2><button data-act="closem">✕</button></div>
+    ${L.length?`<div class="tblw"><table><tr><th>Product</th><th>Buy</th><th>Sell</th><th class="r">Stock</th><th></th></tr>${L.map(p=>`<tr class="cr" style="--h:${hueOf(c.id)}"><td>${esc(tc(p.name))}</td><td><input type="number" min="0" step="0.01" value="${p.buy}" data-change="pe" data-f="buy" data-id="${p.id}"></td><td><input type="number" min="0" step="0.01" value="${p.price}" data-change="pe" data-f="price" data-id="${p.id}"></td><td class="r ${p.stock<1?'out':p.stock<=5?'low':''}">${p.stock}</td><td class="r"><button class="del" data-act="delprod" data-id="${p.id}">Delete</button></td></tr>`).join('')}</table></div>`:'<p class="mut">No products in this category yet.</p>'}
+    <div class="row" style="margin-top:12px"><button data-act="open" data-id="prod" data-x="${c.id}">+ Product</button><button data-act="closem">Close</button></div></div></div>`}
   if(md==='cat'){t='New category';b='<label>Category name</label><input name="name" placeholder="e.g. Beverages" required autofocus>'}
   if(md==='prod'){t='Add product';b=`<label>Category</label><select name="cat">${G.map(c=>`<option value="${c.id}" ${c.id===mdx?'selected':''}>${esc(tc(c.name))}</option>`).join('')}</select><label>Product name</label><input name="name" required autofocus><div class="row"><div><label>Buying price</label><input name="buy" type="number" min="0" step="0.01" required></div><div><label>Selling price</label><input name="price" type="number" min="0" step="0.01" required></div></div><label>Opening stock</label><input name="stock" type="number" min="0" value="0" required>`}
-  if(md==='stock'){t='Add stock';b=`<label>Product</label><select name="id">${P.map(p=>`<option value="${p.id}" ${p.id===mdx?'selected':''}>${esc(dn(p))} (${p.stock})</option>`).join('')}</select><label>Quantity to add</label><input name="qty" type="number" min="1" required autofocus>`}
+  if(md==='stock'){const sp=P.find(p=>p.id===mdx)||P[0];t='Add stock';b=`${sp?`<div class="dcard" style="margin-bottom:10px">${catTag(sp.cat)} <b>${esc(tc(sp.name))}</b><br><small class="mut">Current stock: ${sp.stock}</small></div>`:''}<label>Product</label><select name="id" data-change="sp">${P.map(p=>`<option value="${p.id}" ${sp&&p.id===sp.id?'selected':''}>${esc(dn(p))} (${p.stock})</option>`).join('')}</select><label>Quantity to add</label><input name="qty" type="number" min="1" required autofocus>`}
   if(md==='user'){t='Register user';b=`<label>Full name</label><input name="name" required autofocus><label>Username</label><input name="user" required><label>Password</label><input name="pass" type="password" minlength="4" required><label>Role</label><select name="role"><option value="cashier">Cashier – sell, add stock</option><option value="manager">Manager – + products, categories, reports</option><option value="admin">Admin – everything incl. users</option></select>`}
   if(md==='sdate'){const sl=sales.find(x=>x.id===mdx)||{ts:Date.now(),no:''};t='Change date · Receipt #'+sl.no;b=`<label>Date &amp; time</label><input type="datetime-local" name="dt" value="${dtv(sl.ts)}" required autofocus>`}
   return `<div class="modal"><div class="card" style="width:100%;max-width:420px"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">${t}</h2><button data-act="closem">✕</button></div><form data-form="${md}">${b}<div class="err">${esc(err)}</div><div class="row"><button type="button" data-act="closem">Cancel</button><button class="pri">Save</button></div></form></div></div>`;
@@ -252,16 +271,17 @@ document.addEventListener('submit',async e=>{
   if(k==='cat'&&can('products')){const n=tc(d.name.trim());if(mine(cats).some(c=>c.name.toLowerCase()===n.toLowerCase()))return toast('Category exists');
     return ask('Save category "'+n+'"?',()=>{cats.push({id:uid(),co:C.code,name:n,hue:newHue()});save(K.g,cats);md=null;toast('Category saved')})}
   if(k==='prod'&&can('products'))return ask('Save product "'+d.name.trim()+'"?',()=>{prods.push({id:uid(),co:C.code,cat:d.cat,name:tc(d.name.trim()),buy:+d.buy,price:+d.price,stock:parseInt(d.stock)||0});save(K.p,prods);md=null;toast('Product saved')});
-  if(k==='stock'&&can('stock')){const p=mine(prods).find(x=>x.id===d.id);if(p)return ask('Add '+(parseInt(d.qty)||0)+' units to '+p.name+'?',()=>{p.stock+=parseInt(d.qty)||0;save(K.p,prods);md=null;toast('Stock added: '+p.name)})}
+  if(k==='stock'&&can('stock')){const p=mine(prods).find(x=>x.id===d.id);if(p)return ask('Add '+(parseInt(d.qty)||0)+' units to '+dn(p)+'?',()=>{p.stock+=parseInt(d.qty)||0;save(K.p,prods);md=null;toast('Stock added: '+dn(p))})}
   render();
 });
 document.addEventListener('change',e=>{
   const t=e.target,c=t.dataset.change,id=t.dataset.id;if(!c)return;
   if(c==='paid'){paid=t.value;return}
+  if(c==='sp'){mdx=t.value}
   if(c==='pm'){const p=pays[+t.dataset.i];if(p)p.m=t.value}
   if(c==='cu'){cust[t.dataset.f]=t.value;return}
   if(c==='cq'){const l=cart.find(x=>x.id===id),p=prods.find(x=>x.id===id);if(l&&p){let v=parseInt(t.value)||0;if(v>p.stock){v=p.stock;toast('Only '+p.stock+' in stock','warn')}if(v<1)cart=cart.filter(x=>x!==l);else l.qty=v}}
-  if(c==='filt'){filt=t.value;pg.sell=1}if(c==='ps'){ps=+t.value;pg={}}if(c==='from')from=t.value;if(c==='to')to=t.value;
+  if(c==='filt'){filt=t.value;pg.sell=1}if(c==='ps'){ps=+t.value;pg={}}if(c==='from'){from=t.value;pg.tx=pg.dp=1}if(c==='to'){to=t.value;pg.tx=pg.dp=1}
   if(c==='cp'){const l=cart.find(x=>x.id===id),v=Math.max(0,+t.value||0);if(l)return ask('Change the selling price to '+money(v)+' for this sale?',()=>{l.price=v;toast('Price changed for this sale')},true)}
   if(c==='pe'&&U&&can('products')){const p=prods.find(x=>x.id===id),v=Math.max(0,+t.value||0),f=t.dataset.f;if(p)return ask('Change the '+(f==='buy'?'buying':'selling')+' price of '+p.name+' to '+money(v)+'?',()=>{p[f]=v;save(K.p,prods);toast('Price updated')},true)}
   if(c==='role'&&U&&can('users')){const u=users.find(x=>x.id===id),v=t.value;if(u&&u.co===C.code)return ask('Change '+u.name+' to '+v+'?',async()=>{await api('PATCH','/api/users/'+u.id,{role:v});u.role=v;toast('Role updated')},true)}
@@ -282,7 +302,7 @@ document.addEventListener('click',e=>{
   if(a==='rmpay')pays.splice(+id,1);
   if(a==='qadd'){const nm=($('#qn').value||'').trim().toLowerCase(),qty=Math.max(1,parseInt($('#qq').value)||1),av=mine(prods).filter(x=>x.stock>0);
     let p=av.find(x=>dn(x).toLowerCase()===nm);if(!p&&nm){const m=av.filter(x=>dn(x).toLowerCase().includes(nm));if(m.length===1)p=m[0]}
-    if(p)addCart(p,qty);else toast(nm?'No in-stock product matches that name':'Type a product name first','warn')}
+    if(p)addCart(p,qty);else toast(!nm?'Type a product name first':av.some(x=>dn(x).toLowerCase().includes(nm))?'Several products match - choose one from the list':'No in-stock product matches that name','warn')}
   if(a==='tab'&&can(id)){tab=id;err='';md=null;dr=false}
   if(a==='wk')wk=Math.max(0,wk+ +id);
   if(a==='closer')rc=null;
