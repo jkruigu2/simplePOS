@@ -26,3 +26,13 @@ Notes
 - Render's free plan sleeps after 15 minutes idle; the first visit afterwards can take about 30 seconds.
 - Log in again on the Render address (browsers keep logins separately per website address).
 - Atlas > Network Access must allow `0.0.0.0/0`.
+
+## New in this version
+- **Returns & refunds** (Reports > Refund), **expenses**, **stock history & adjustments**, **low stock list**, **audit log**.
+- **Export to CSV, full backup and restore** (Settings > Backup & export, admin only).
+- **Hold a sale** (Cart > Hold / Held).
+- **Works offline**: install the site to the home screen. Sales, stock and other records made without internet are saved on the device and sent automatically when the connection returns.
+- **Password reset**: users change their own password; admins reset anyone's; a forgotten password is reset with the **recovery code** shown once at registration (admins can make a new one in Settings).
+
+Redeploy BOTH `server.js` and `public/` (index.html, sw.js, manifest.webmanifest, icon.svg).
+Existing companies have no recovery code yet: log in as admin, open Settings and tap **Recovery code**.

@@ -1,0 +1,9 @@
+{
+  "name": "Simple POS",
+  "short_name": "POS",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0e7c66",
+  "theme_color": "#0e7c66",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

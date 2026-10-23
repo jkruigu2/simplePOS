@@ -2,26 +2,28 @@ require('dotenv').config();
 // Only needed on devices whose DNS can't look up Atlas (querySrv EBADRESP, e.g. Termux): set DNS_SERVERS=8.8.8.8,1.1.1.1 in .env
 if (process.env.DNS_SERVERS) require('dns').setServers(process.env.DNS_SERVERS.split(',').map(x => x.trim()));
 const express = require('express'), mongoose = require('mongoose'), bcrypt = require('bcryptjs'),
-      jwt = require('jsonwebtoken'), path = require('path');
+      jwt = require('jsonwebtoken'), path = require('path'), crypto = require('crypto');
 const SECRET = process.env.JWT_SECRET;
 
 const app = express();
-app.use(express.json({ limit: '5mb' }));
+app.set('trust proxy', 1);
+app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ---------- models ----------
 const M = (n, f = {}) => mongoose.model(n, new mongoose.Schema(
   { co: { type: String, index: true }, id: String, ...f }, { strict: false, versionKey: false, id: false }));
 const Company = mongoose.model('Company', new mongoose.Schema(
-  { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String }, { versionKey: false }));
+  { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String, rh: String }, { versionKey: false }));
 const User = M('User', { user: String, name: String, role: String, h: String });
-const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale');
+const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund');
 
 // ---------- helpers ----------
 const ROLES = ['admin', 'manager', 'cashier'];
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const fail = (c, m) => { const e = new Error(m); e.status = c; throw e; };
 const wrap = f => (q, s) => f(q, s).catch(e => s.status(e.status || 500).json({ error: e.message || 'Server error' }));
+const rcode = () => [...crypto.randomBytes(12)].map(b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('').replace(/(.{4})(?=.)/g, '$1-');
 const tok = u => jwt.sign({ uid: u.id }, SECRET, { expiresIn: '7d' });
 const pub = u => ({ id: u.id, co: u.co, user: u.user, name: u.name, role: u.role });
 const clean = (a, co) => { if (!Array.isArray(a) || a.length > 20000) fail(400, 'Bad data'); return a.filter(x => x && x.id).map(x => ({ ...x, co })); };
@@ -50,9 +52,10 @@ app.post('/api/register', wrap(async (q, s) => {
   const d = q.body, code = String(d.code || '').trim().toUpperCase(), user = String(d.user || '').trim().toLowerCase();
   if (!code || !user || !d.name || !d.pass || String(d.pass).length < 4) fail(400, 'Fill in all fields (password min 4 characters).');
   if (await Company.findOne({ code })) fail(409, 'That company code is already in use.');
-  await Company.create({ code, name: String(d.name).trim(), loc: d.loc, motto: d.motto, phone: d.phone });
+  const recovery = rcode();
+  await Company.create({ code, name: String(d.name).trim(), loc: d.loc, motto: d.motto, phone: d.phone, rh: await bcrypt.hash(recovery, 10) });
   const u = await User.create({ id: uid(), co: code, user, name: String(d.user).trim(), role: 'admin', h: await bcrypt.hash(String(d.pass), 10) });
-  s.json({ token: tok(u) });
+  s.json({ token: tok(u), recovery });
 }));
 app.post('/api/login', wrap(async (q, s) => {
   const d = q.body;
@@ -63,11 +66,12 @@ app.post('/api/login', wrap(async (q, s) => {
 
 // ---------- data ----------
 app.get('/api/data', auth, wrap(async (q, s) => {
-  const f = { co: q.u.co }, L = m => m.find(f).select('-_id').lean();
-  const [company, users, cats, prods, sales] = await Promise.all([
-    Company.findOne({ code: q.u.co }).select('-_id').lean(),
-    User.find(f).select('-_id -h').lean(), L(Cat), L(Prod), L(Sale)]);
-  s.json({ company, users, cats, prods, sales, me: q.u.id });
+  const f = { co: q.u.co }, r = q.u.role, mgr = r !== 'cashier', adm = r === 'admin';
+  const L = (m, lim) => { let c = m.find(f).select('-_id'); if (lim) c = c.sort({ ts: -1 }).limit(lim); return c.lean(); };
+  const [company, users, cats, prods, sales, expenses, rets, moves, logs] = await Promise.all([
+    Company.findOne({ code: q.u.co }).select('-_id -rh').lean(), User.find(f).select('-_id -h').lean(), L(Cat), L(Prod), L(Sale),
+    mgr ? L(Expense) : [], mgr ? L(Refund) : [], mgr ? L(Move, 500) : [], adm ? L(Log, 500) : []]);
+  s.json({ company, users, cats, prods, sales, expenses, rets, moves, logs, me: q.u.id });
 }));
 app.put('/api/cats', auth, need('admin', 'manager'), wrap(async (q, s) => {
   await replaceAll(Cat, q.u.co, clean(q.body, q.u.co)); s.json({ ok: 1 });
@@ -87,12 +91,63 @@ app.put('/api/sales', auth, wrap(async (q, s) => {   // append-only
   s.json({ ok: 1 });
 }));
 
-app.patch('/api/sales/:id', auth, need('admin', 'manager'), wrap(async (q, s) => {   // change receipt date
-  const ts = Number(q.body.ts); if (!ts) fail(400, 'Bad date');
-  await Sale.updateOne({ co: q.u.co, id: q.params.id }, { ts }); s.json({ ok: 1 });
+const SALE_FIELDS = ['ts', 'total', 'profit', 'items', 'refs', 'refunded', 'otot'];
+app.patch('/api/sales/:id', auth, need('admin', 'manager'), wrap(async (q, s) => {   // change date / record a return
+  const set = {};
+  for (const k of SALE_FIELDS) if (q.body[k] !== undefined) set[k] = q.body[k];
+  if ('ts' in set) { set.ts = Number(set.ts); if (!set.ts) fail(400, 'Bad date'); }
+  if (!Object.keys(set).length) fail(400, 'Nothing to update');
+  await Sale.updateOne({ co: q.u.co, id: q.params.id }, { $set: set }); s.json({ ok: 1 });
 }));
 app.delete('/api/sales/:id', auth, need('admin', 'manager'), wrap(async (q, s) => {   // delete receipt
   await Sale.deleteOne({ co: q.u.co, id: q.params.id }); s.json({ ok: 1 });
+}));
+
+app.put('/api/expenses', auth, need('admin', 'manager'), wrap(async (q, s) => {
+  await replaceAll(Expense, q.u.co, clean(q.body, q.u.co)); s.json({ ok: 1 });
+}));
+const append = (path, Mo, roles) => app.put(path, auth, need(...roles), wrap(async (q, s) => {   // append-only records
+  const co = q.u.co, a = clean(q.body, co);
+  const have = new Set((await Mo.find({ co, id: { $in: a.map(x => x.id) } }).select('id').lean()).map(x => x.id));
+  const n = a.filter(x => !have.has(x.id)).map(x => ({ ...x, by: q.u.name }));
+  if (n.length) await Mo.insertMany(n);
+  s.json({ ok: 1 });
+}));
+append('/api/moves', Move, ['admin', 'manager', 'cashier']);
+append('/api/logs', Log, ['admin', 'manager', 'cashier']);
+append('/api/rets', Refund, ['admin', 'manager']);
+app.post('/api/restore', auth, need('admin'), wrap(async (q, s) => {   // replace this company's data with a backup
+  const co = q.u.co, d = q.body || {};
+  const put = async (Mo, a) => { await Mo.deleteMany({ co }); if (Array.isArray(a) && a.length) await Mo.insertMany(clean(a, co)); };
+  await put(Cat, d.cats); await put(Prod, d.prods); await put(Sale, d.sales); await put(Expense, d.expenses);
+  await put(Move, d.moves); await put(Log, d.logs); await put(Refund, d.rets);
+  s.json({ ok: 1 });
+}));
+
+// ---------- passwords ----------
+const tries = {};
+app.post('/api/reset', wrap(async (q, s) => {   // forgot password: company code + recovery code
+  const d = q.body, code = String(d.code || '').trim().toUpperCase(), user = String(d.user || '').trim().toLowerCase();
+  const key = q.ip + code, t = tries[key] = (tries[key] || []).filter(x => Date.now() - x < 900000);
+  if (t.length >= 5) fail(429, 'Too many attempts. Try again in 15 minutes.');
+  t.push(Date.now());
+  const c = await Company.findOne({ code }), u = await User.findOne({ co: code, user });
+  if (!c || !c.rh || !u || !(await bcrypt.compare(String(d.recovery || '').trim().toUpperCase(), c.rh))) fail(401, 'Company code, username or recovery code is wrong.');
+  if (String(d.pass || '').length < 4) fail(400, 'Password must be at least 4 characters.');
+  await User.updateOne({ co: code, id: u.id }, { h: await bcrypt.hash(String(d.pass), 10) }); s.json({ ok: 1 });
+}));
+app.post('/api/recovery', auth, need('admin'), wrap(async (q, s) => {
+  const code = rcode(); await Company.updateOne({ code: q.u.co }, { rh: await bcrypt.hash(code, 10) }); s.json({ code });
+}));
+app.post('/api/password', auth, wrap(async (q, s) => {   // change my own password
+  const d = q.body, u = await User.findOne({ co: q.u.co, id: q.u.id });
+  if (!(await bcrypt.compare(String(d.cur || ''), u.h))) fail(401, 'Current password is wrong.');
+  if (String(d.pass || '').length < 4) fail(400, 'Password must be at least 4 characters.');
+  await User.updateOne({ co: q.u.co, id: q.u.id }, { h: await bcrypt.hash(String(d.pass), 10) }); s.json({ ok: 1 });
+}));
+app.patch('/api/users/:id/password', auth, need('admin'), wrap(async (q, s) => {   // admin resets a user's password
+  if (String(q.body.pass || '').length < 4) fail(400, 'Password must be at least 4 characters.');
+  await User.updateOne({ co: q.u.co, id: q.params.id }, { h: await bcrypt.hash(String(q.body.pass), 10) }); s.json({ ok: 1 });
 }));
 
 // ---------- users (admin only) ----------
@@ -102,9 +157,12 @@ app.post('/api/users', auth, need('admin'), wrap(async (q, s) => {
   if (await User.findOne({ co: q.u.co, user })) fail(409, 'Username already exists.');
   s.json(pub(await User.create({ id: uid(), co: q.u.co, user, name: String(d.name).trim(), role: d.role, h: await bcrypt.hash(String(d.pass), 10) })));
 }));
-app.patch('/api/users/:id', auth, need('admin'), wrap(async (q, s) => {
-  if (!ROLES.includes(q.body.role)) fail(400, 'Bad role');
-  await User.updateOne({ co: q.u.co, id: q.params.id }, { role: q.body.role }); s.json({ ok: 1 });
+app.patch('/api/users/:id', auth, need('admin'), wrap(async (q, s) => {   // change role and/or reset password
+  const set = {};
+  if (q.body.role !== undefined) { if (!ROLES.includes(q.body.role)) fail(400, 'Bad role'); set.role = q.body.role; }
+  if (q.body.pass !== undefined) { if (String(q.body.pass).length < 4) fail(400, 'Password must be at least 4 characters.'); set.h = await bcrypt.hash(String(q.body.pass), 10); }
+  if (!Object.keys(set).length) fail(400, 'Nothing to update');
+  await User.updateOne({ co: q.u.co, id: q.params.id }, { $set: set }); s.json({ ok: 1 });
 }));
 app.delete('/api/users/:id', auth, need('admin'), wrap(async (q, s) => {
   if (q.params.id === q.u.id) fail(400, 'You cannot delete yourself.');
