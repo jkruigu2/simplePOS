@@ -1,4 +1,6 @@
 require('dotenv').config();
+// Only needed on devices whose DNS can't look up Atlas (querySrv EBADRESP, e.g. Termux): set DNS_SERVERS=8.8.8.8,1.1.1.1 in .env
+if (process.env.DNS_SERVERS) require('dns').setServers(process.env.DNS_SERVERS.split(',').map(x => x.trim()));
 const express = require('express'), mongoose = require('mongoose'), bcrypt = require('bcryptjs'),
       jwt = require('jsonwebtoken'), path = require('path');
 const SECRET = process.env.JWT_SECRET;
@@ -85,6 +87,14 @@ app.put('/api/sales', auth, wrap(async (q, s) => {   // append-only
   s.json({ ok: 1 });
 }));
 
+app.patch('/api/sales/:id', auth, need('admin', 'manager'), wrap(async (q, s) => {   // change receipt date
+  const ts = Number(q.body.ts); if (!ts) fail(400, 'Bad date');
+  await Sale.updateOne({ co: q.u.co, id: q.params.id }, { ts }); s.json({ ok: 1 });
+}));
+app.delete('/api/sales/:id', auth, need('admin', 'manager'), wrap(async (q, s) => {   // delete receipt
+  await Sale.deleteOne({ co: q.u.co, id: q.params.id }); s.json({ ok: 1 });
+}));
+
 // ---------- users (admin only) ----------
 app.post('/api/users', auth, need('admin'), wrap(async (q, s) => {
   const d = q.body, user = String(d.user || '').trim().toLowerCase();
@@ -101,7 +111,7 @@ app.delete('/api/users/:id', auth, need('admin'), wrap(async (q, s) => {
   await User.deleteOne({ co: q.u.co, id: q.params.id }); s.json({ ok: 1 });
 }));
 
-module.exports = app;   //used by the Netlify function
+module.exports = app;   // used by the Netlify function
 
 if (require.main === module) {   // normal `npm start` (Render, Railway, local)
   if (!SECRET || !process.env.MONGODB_URI) { console.error('Set MONGODB_URI and JWT_SECRET in .env'); process.exit(1); }
