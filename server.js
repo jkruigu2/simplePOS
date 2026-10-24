@@ -14,7 +14,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 const M = (n, f = {}) => mongoose.model(n, new mongoose.Schema(
   { co: { type: String, index: true }, id: String, ...f }, { strict: false, versionKey: false, id: false }));
 const Company = mongoose.model('Company', new mongoose.Schema(
-  { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String, rh: String }, { versionKey: false }));
+  { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String, cur: String, rh: String }, { versionKey: false }));
 const User = M('User', { user: String, name: String, role: String, h: String });
 const Branch = M('Branch', { name: String, loc: String });
 const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund');
@@ -141,6 +141,12 @@ app.post('/api/restore', auth, need('admin'), wrap(async (q, s) => {   // replac
   await put(Cat, d.cats); await put(Prod, d.prods); await put(Sale, d.sales); await put(Expense, d.expenses);
   await put(Move, d.moves); await put(Log, d.logs); await put(Refund, d.rets);
   s.json({ ok: 1 });
+}));
+
+app.patch('/api/company', auth, need('admin'), wrap(async (q, s) => {   // currency symbol
+  const cur = String(q.body.cur || '').trim().slice(0, 6);
+  if (!cur) fail(400, 'Enter a currency symbol.');
+  await Company.updateOne({ code: q.u.co }, { $set: { cur } }); s.json({ ok: 1, cur });
 }));
 
 // ---------- branches (admin only) ----------
