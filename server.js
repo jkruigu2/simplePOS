@@ -16,7 +16,9 @@ const M = (n, f = {}) => mongoose.model(n, new mongoose.Schema(
 const Company = mongoose.model('Company', new mongoose.Schema(
   { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String, rh: String }, { versionKey: false }));
 const User = M('User', { user: String, name: String, role: String, h: String });
+const Branch = M('Branch', { name: String, loc: String });
 const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund');
+const DATA = [Cat, Prod, Sale, Expense, Move, Log, Refund];   // everything that belongs to one branch (has a `br` field)
 
 // ---------- helpers ----------
 const ROLES = ['admin', 'manager', 'cashier'];
@@ -25,20 +27,30 @@ const fail = (c, m) => { const e = new Error(m); e.status = c; throw e; };
 const wrap = f => (q, s) => f(q, s).catch(e => s.status(e.status || 500).json({ error: e.message || 'Server error' }));
 const rcode = () => [...crypto.randomBytes(12)].map(b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('').replace(/(.{4})(?=.)/g, '$1-');
 const tok = u => jwt.sign({ uid: u.id }, SECRET, { expiresIn: '7d' });
-const pub = u => ({ id: u.id, co: u.co, user: u.user, name: u.name, role: u.role });
-const clean = (a, co) => { if (!Array.isArray(a) || a.length > 20000) fail(400, 'Bad data'); return a.filter(x => x && x.id).map(x => ({ ...x, co })); };
+const pub = u => ({ id: u.id, co: u.co, user: u.user, name: u.name, role: u.role, br: u.br || [] });
+// Branch access: admins see every branch; managers and cashiers only the branches assigned to them.
+const scope = q => q.u.role === 'admin' ? { co: q.u.co } : { co: q.u.co, br: { $in: q.u.br || [] } };
+const okBr = (q, b) => !!b && (q.u.role === 'admin' || (q.u.br || []).includes(b));
+const clean = (a, q) => { if (!Array.isArray(a) || a.length > 20000) fail(400, 'Bad data'); return a.filter(x => x && x.id && okBr(q, x.br)).map(x => ({ ...x, co: q.u.co })); };
+const newBranch = async (co, name, loc = '', id = uid()) => { await Branch.updateOne({ co, id }, { $setOnInsert: { co, id, name, loc } }, { upsert: true }); return { id, co, name, loc }; };
+async function ensureBranch(co) {   // companies created before branches existed get one branch ("Main") that owns all their data
+  if (await Branch.countDocuments({ co })) return;
+  await newBranch(co, 'Main', '', 'main');
+  for (const Mo of DATA) await Mo.updateMany({ co, br: { $exists: false } }, { $set: { br: 'main' } });
+  await User.updateMany({ co, role: { $ne: 'admin' }, br: { $exists: false } }, { $set: { br: ['main'] } });
+}
 async function auth(q, s, n) {
   try {
     const p = jwt.verify((q.headers.authorization || '').slice(7), SECRET);
-    const u = await User.findOne({ id: p.uid }).lean();   // role is read fresh on every request
+    const u = await User.findOne({ id: p.uid }).lean();   // role and branches are read fresh on every request
     if (!u) throw 0;
     q.u = u; n();
   } catch (e) { s.status(401).json({ error: 'Please log in again' }); }
 }
 const need = (...r) => (q, s, n) => r.includes(q.u.role) ? n() : s.status(403).json({ error: 'Not allowed for your role' });
-const replaceAll = (Mo, co, a) => Mo.bulkWrite([
-  { deleteMany: { filter: { co, id: { $nin: a.map(x => x.id) } } } },
-  ...a.map(x => ({ replaceOne: { filter: { co, id: x.id }, replacement: x, upsert: true } }))]);
+const replaceAll = (Mo, q, a) => Mo.bulkWrite([
+  { deleteMany: { filter: { ...scope(q), id: { $nin: a.map(x => x.id) } } } },
+  ...a.map(x => ({ replaceOne: { filter: { co: q.u.co, id: x.id }, replacement: x, upsert: true } }))]);
 
 // ---------- health check ----------
 app.get('/api/health', wrap(async (q, s) => {
@@ -54,7 +66,8 @@ app.post('/api/register', wrap(async (q, s) => {
   if (await Company.findOne({ code })) fail(409, 'That company code is already in use.');
   const recovery = rcode();
   await Company.create({ code, name: String(d.name).trim(), loc: d.loc, motto: d.motto, phone: d.phone, rh: await bcrypt.hash(recovery, 10) });
-  const u = await User.create({ id: uid(), co: code, user, name: String(d.user).trim(), role: 'admin', h: await bcrypt.hash(String(d.pass), 10) });
+  await newBranch(code, 'Main', '', 'main');
+  const u = await User.create({ id: uid(), co: code, user, name: String(d.user).trim(), role: 'admin', br: [], h: await bcrypt.hash(String(d.pass), 10) });
   s.json({ token: tok(u), recovery });
 }));
 app.post('/api/login', wrap(async (q, s) => {
@@ -66,48 +79,50 @@ app.post('/api/login', wrap(async (q, s) => {
 
 // ---------- data ----------
 app.get('/api/data', auth, wrap(async (q, s) => {
-  const f = { co: q.u.co }, r = q.u.role, mgr = r !== 'cashier', adm = r === 'admin';
+  await ensureBranch(q.u.co);
+  q.u = await User.findOne({ id: q.u.id }).lean();
+  const f = scope(q), r = q.u.role, mgr = r !== 'cashier', adm = r === 'admin';
   const L = (m, lim) => { let c = m.find(f).select('-_id'); if (lim) c = c.sort({ ts: -1 }).limit(lim); return c.lean(); };
-  const [company, users, cats, prods, sales, expenses, rets, moves, logs] = await Promise.all([
-    Company.findOne({ code: q.u.co }).select('-_id -rh').lean(), User.find(f).select('-_id -h').lean(), L(Cat), L(Prod), L(Sale),
-    mgr ? L(Expense) : [], mgr ? L(Refund) : [], mgr ? L(Move, 500) : [], adm ? L(Log, 500) : []]);
-  s.json({ company, users, cats, prods, sales, expenses, rets, moves, logs, me: q.u.id });
+  const [company, users, branches, cats, prods, sales, expenses, rets, moves, logs] = await Promise.all([
+    Company.findOne({ code: q.u.co }).select('-_id -rh').lean(), User.find({ co: q.u.co }).select('-_id -h').lean(),
+    Branch.find(adm ? { co: q.u.co } : { co: q.u.co, id: { $in: q.u.br || [] } }).select('-_id').lean(),
+    L(Cat), L(Prod), L(Sale), mgr ? L(Expense) : [], mgr ? L(Refund) : [], mgr ? L(Move, 500) : [], adm ? L(Log, 500) : []]);
+  s.json({ company, users, branches, cats, prods, sales, expenses, rets, moves, logs, me: q.u.id });
 }));
 app.put('/api/cats', auth, need('admin', 'manager'), wrap(async (q, s) => {
-  await replaceAll(Cat, q.u.co, clean(q.body, q.u.co)); s.json({ ok: 1 });
+  await replaceAll(Cat, q, clean(q.body, q)); s.json({ ok: 1 });
 }));
 app.put('/api/prods', auth, wrap(async (q, s) => {
-  const co = q.u.co, a = clean(q.body, co);
+  const co = q.u.co, a = clean(q.body, q);
   if (q.u.role === 'cashier') {            // cashiers may only change stock levels
-    if (a.length) await Prod.bulkWrite(a.map(x => ({ updateOne: { filter: { co, id: x.id }, update: { $set: { stock: Number(x.stock) || 0 } } } })));
-  } else await replaceAll(Prod, co, a);
+    if (a.length) await Prod.bulkWrite(a.map(x => ({ updateOne: { filter: { ...scope(q), id: x.id }, update: { $set: { stock: Number(x.stock) || 0 } } } })));
+  } else await replaceAll(Prod, q, a);
   s.json({ ok: 1 });
 }));
 app.put('/api/sales', auth, wrap(async (q, s) => {   // append-only
-  const co = q.u.co, a = clean(q.body, co);
-  const have = new Set((await Sale.find({ co }).select('id').lean()).map(x => x.id));
+  const co = q.u.co, a = clean(q.body, q);
+  const have = new Set((await Sale.find({ co, id: { $in: a.map(x => x.id) } }).select('id').lean()).map(x => x.id));
   const n = a.filter(x => !have.has(x.id)).map(x => ({ ...x, by: q.u.name }));
   if (n.length) await Sale.insertMany(n);
   s.json({ ok: 1 });
 }));
 
 const SALE_FIELDS = ['ts', 'total', 'profit', 'items', 'refs', 'refunded', 'otot'];
-app.patch('/api/sales/:id', auth, need('admin', 'manager'), wrap(async (q, s) => {   // change date / record a return
+app.patch('/api/sales/:id', auth, need('admin', 'manager'), wrap(async (q, s) => {   // change date
   const set = {};
   for (const k of SALE_FIELDS) if (q.body[k] !== undefined) set[k] = q.body[k];
   if ('ts' in set) { set.ts = Number(set.ts); if (!set.ts) fail(400, 'Bad date'); }
   if (!Object.keys(set).length) fail(400, 'Nothing to update');
-  await Sale.updateOne({ co: q.u.co, id: q.params.id }, { $set: set }); s.json({ ok: 1 });
+  await Sale.updateOne({ ...scope(q), id: q.params.id }, { $set: set }); s.json({ ok: 1 });
 }));
 app.delete('/api/sales/:id', auth, need('admin', 'manager'), wrap(async (q, s) => {   // delete receipt
-  await Sale.deleteOne({ co: q.u.co, id: q.params.id }); s.json({ ok: 1 });
+  await Sale.deleteOne({ ...scope(q), id: q.params.id }); s.json({ ok: 1 });
 }));
-
 app.put('/api/expenses', auth, need('admin', 'manager'), wrap(async (q, s) => {
-  await replaceAll(Expense, q.u.co, clean(q.body, q.u.co)); s.json({ ok: 1 });
+  await replaceAll(Expense, q, clean(q.body, q)); s.json({ ok: 1 });
 }));
 const append = (path, Mo, roles) => app.put(path, auth, need(...roles), wrap(async (q, s) => {   // append-only records
-  const co = q.u.co, a = clean(q.body, co);
+  const co = q.u.co, a = clean(q.body, q);
   const have = new Set((await Mo.find({ co, id: { $in: a.map(x => x.id) } }).select('id').lean()).map(x => x.id));
   const n = a.filter(x => !have.has(x.id)).map(x => ({ ...x, by: q.u.name }));
   if (n.length) await Mo.insertMany(n);
@@ -118,9 +133,35 @@ append('/api/logs', Log, ['admin', 'manager', 'cashier']);
 append('/api/rets', Refund, ['admin', 'manager']);
 app.post('/api/restore', auth, need('admin'), wrap(async (q, s) => {   // replace this company's data with a backup
   const co = q.u.co, d = q.body || {};
-  const put = async (Mo, a) => { await Mo.deleteMany({ co }); if (Array.isArray(a) && a.length) await Mo.insertMany(clean(a, co)); };
+  const fix = a => Array.isArray(a) ? a.map(x => ({ br: 'main', ...x })) : a;   // older backups have no branches
+  if (Array.isArray(d.branches) && d.branches.length) {
+    await Branch.deleteMany({ co }); await Branch.insertMany(d.branches.filter(x => x && x.id).map(x => ({ ...x, co })));
+  } else { await Branch.deleteMany({ co }); await newBranch(co, 'Main', '', 'main'); }
+  const put = async (Mo, a) => { await Mo.deleteMany({ co }); a = fix(a); if (Array.isArray(a) && a.length) await Mo.insertMany(clean(a, q)); };
   await put(Cat, d.cats); await put(Prod, d.prods); await put(Sale, d.sales); await put(Expense, d.expenses);
   await put(Move, d.moves); await put(Log, d.logs); await put(Refund, d.rets);
+  s.json({ ok: 1 });
+}));
+
+// ---------- branches (admin only) ----------
+app.post('/api/branches', auth, need('admin'), wrap(async (q, s) => {
+  const name = String(q.body.name || '').trim();
+  if (!name) fail(400, 'Enter a branch name.');
+  if (await Branch.findOne({ co: q.u.co, name })) fail(409, 'A branch with that name already exists.');
+  s.json(await newBranch(q.u.co, name, String(q.body.loc || '').trim()));
+}));
+app.patch('/api/branches/:id', auth, need('admin'), wrap(async (q, s) => {
+  const name = String(q.body.name || '').trim();
+  if (!name) fail(400, 'Enter a branch name.');
+  await Branch.updateOne({ co: q.u.co, id: q.params.id }, { $set: { name, loc: String(q.body.loc || '').trim() } }); s.json({ ok: 1 });
+}));
+app.delete('/api/branches/:id', auth, need('admin'), wrap(async (q, s) => {
+  const co = q.u.co, id = q.params.id;
+  if ((await Branch.countDocuments({ co })) < 2) fail(400, 'You need at least one branch.');
+  if ((await Prod.countDocuments({ co, br: id })) || (await Sale.countDocuments({ co, br: id }))) fail(400, 'This branch still has products or sales. Move them first.');
+  await Branch.deleteOne({ co, id });
+  for (const Mo of [Cat, Expense, Move, Log, Refund]) await Mo.deleteMany({ co, br: id });
+  await User.updateMany({ co }, { $pull: { br: id } });
   s.json({ ok: 1 });
 }));
 
@@ -151,18 +192,24 @@ app.patch('/api/users/:id/password', auth, need('admin'), wrap(async (q, s) => {
 }));
 
 // ---------- users (admin only) ----------
+const goodBr = async (co, a) => { const ids = (await Branch.find({ co }).select('id').lean()).map(x => x.id); return (Array.isArray(a) ? a : []).filter(x => ids.includes(x)); };
 app.post('/api/users', auth, need('admin'), wrap(async (q, s) => {
   const d = q.body, user = String(d.user || '').trim().toLowerCase();
   if (!user || !d.name || !d.pass || String(d.pass).length < 4 || !ROLES.includes(d.role)) fail(400, 'Invalid user details.');
   if (await User.findOne({ co: q.u.co, user })) fail(409, 'Username already exists.');
-  s.json(pub(await User.create({ id: uid(), co: q.u.co, user, name: String(d.name).trim(), role: d.role, h: await bcrypt.hash(String(d.pass), 10) })));
+  const br = d.role === 'admin' ? [] : await goodBr(q.u.co, d.br);
+  if (d.role !== 'admin' && !br.length) fail(400, 'Choose at least one branch for this user.');
+  s.json(pub(await User.create({ id: uid(), co: q.u.co, user, name: String(d.name).trim(), role: d.role, br, h: await bcrypt.hash(String(d.pass), 10) })));
 }));
-app.patch('/api/users/:id', auth, need('admin'), wrap(async (q, s) => {   // change role and/or reset password
-  const set = {};
+app.patch('/api/users/:id', auth, need('admin'), wrap(async (q, s) => {   // change role, branches and/or password
+  const set = {}, u = await User.findOne({ co: q.u.co, id: q.params.id }).lean();
+  if (!u) fail(404, 'User not found.');
   if (q.body.role !== undefined) { if (!ROLES.includes(q.body.role)) fail(400, 'Bad role'); set.role = q.body.role; }
+  if (q.body.br !== undefined) set.br = await goodBr(q.u.co, q.body.br);
+  if ((set.role || u.role) !== 'admin' && !(set.br || u.br || []).length) set.br = [(await Branch.findOne({ co: q.u.co }).lean() || {}).id].filter(Boolean);
   if (q.body.pass !== undefined) { if (String(q.body.pass).length < 4) fail(400, 'Password must be at least 4 characters.'); set.h = await bcrypt.hash(String(q.body.pass), 10); }
   if (!Object.keys(set).length) fail(400, 'Nothing to update');
-  await User.updateOne({ co: q.u.co, id: q.params.id }, { $set: set }); s.json({ ok: 1 });
+  await User.updateOne({ co: q.u.co, id: q.params.id }, { $set: set }); s.json({ ok: 1, br: set.br });
 }));
 app.delete('/api/users/:id', auth, need('admin'), wrap(async (q, s) => {
   if (q.params.id === q.u.id) fail(400, 'You cannot delete yourself.');

@@ -36,3 +36,15 @@ Notes
 
 Redeploy BOTH `server.js` and `public/` (index.html, sw.js, manifest.webmanifest, icon.svg).
 Existing companies have no recovery code yet: log in as admin, open Settings and tap **Recovery code**.
+
+## Stock report and monthly graph
+- **Settings > Stock report** (admin, manager): stock cost, retail value and potential profit per category and per product, with an overall total. Untick **Count in total** to leave a category out of the overall total (saved on that device). Export to CSV.
+- **Reports > Monthly sales graph**: sales and profit for each month of a year, with year arrows and a monthly table.
+
+## Branches
+- Each company can have several branches. Every branch has its own categories, products, stock, sales, expenses and receipts numbering.
+- **Settings > Branches** (admin): add, rename or delete branches, **Copy products** between branches (stock starts at 0) and **Transfer stock** from the current branch to another.
+- **Settings > Users**: choose which branches each manager or cashier can use. They only ever receive data for their own branches. Admins see everything.
+- People with more than one branch can switch in **Settings > Branch**. Admins also get **All branches (reports)** for combined Reports, Stock report, Expenses, history and audit log. Selling and stock changes need a single branch.
+- Existing companies get one branch called **Main** automatically the first time someone opens the app after this update, and all current data belongs to it.
+- Deploy BOTH `server.js` and `public/`.

@@ -85,6 +85,8 @@ svg text{fill:var(--mut);font-size:9px}svg .b1{fill:var(--pri)}svg .b2{fill:var(
 .tb{display:flex;justify-content:flex-end;margin-bottom:6px}.cols{position:relative}.cols summary{cursor:pointer;font-size:13px;color:var(--mut);list-style:none;padding:5px 12px;border:1px solid var(--bd);border-radius:8px;background:var(--card)}.cols summary::-webkit-details-marker{display:none}
 .colbox{position:absolute;right:0;z-index:20;background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:8px 14px;box-shadow:0 10px 30px rgba(0,0,0,.2);min-width:180px}.colbox label{display:flex;gap:8px;align-items:center;padding:5px 0;color:var(--tx);font-size:14px}.colbox input{width:auto;height:auto;margin:0}
 .pgr{margin-top:8px}th.srt{cursor:pointer;user-select:none}th.srt::after{content:'↕';opacity:.35;margin-left:5px}th[data-s="1"]::after{content:'↑';opacity:1}th[data-s="-1"]::after{content:'↓';opacity:1}
+tr.exm td{opacity:.5}
+.chk{display:flex;gap:8px;align-items:center;color:var(--tx);font-size:14px;padding:4px 0}.chk input{width:auto;height:auto;margin:0}
 .lock{position:fixed;inset:0;background:var(--bg);display:grid;place-items:center;padding:16px;z-index:300}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 @media print{body *{visibility:hidden}.modal,.receipt,.receipt *{visibility:visible}.modal{position:absolute;background:none;padding:0;display:block}.receipt{border:0;max-width:100%;box-shadow:none}.noprint{display:none!important}.ld{display:none}}
@@ -99,7 +101,7 @@ let token='';try{token=localStorage.getItem('pos3_token')||''}catch(e){}
 const APPEND=['/api/sales','/api/moves','/api/logs','/api/rets'];
 const pend=()=>load('pos3_q',[]).length;
 const pill=()=>navigator.onLine&&!pend()?'':`<span class="badge" style="background:var(--warn);color:#fff">${navigator.onLine?'Syncing '+pend():'Offline'+(pend()?' · '+pend()+' waiting':'')}</span>`;
-function cacheState(){try{localStorage.setItem('pos3_cache',JSON.stringify({cos,users,cats,prods,sales,expenses,moves,logs,rets,session}))}catch(e){}}
+function cacheState(){try{localStorage.setItem('pos3_cache',JSON.stringify({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,session}))}catch(e){}}
 async function raw(m,p,b){let r;try{r=await fetch((window.POS_API||'')+p,{method:m,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:b?JSON.stringify(b):undefined})}catch(x){const e=new Error('You are offline - connect to the internet and try again');e.net=true;throw e}
   const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||(r.status===404||r.status===405?'Server is missing this feature - deploy the latest server.js':'Request failed ('+r.status+')'));return j}
 function enqueue(m,p,b){let q=load('pos3_q',[]);
@@ -121,9 +123,9 @@ const ROUTE={[K.g]:'cats',[K.p]:'prods',[K.l]:'sales',[K.e]:'expenses'};
 const save=(k,v)=>{if(ROUTE[k]){api('PUT','/api/'+ROUTE[k],k===K.l?v.slice(-1):v,false,true).catch(e=>toast(e.message,'err'));cacheState()}else try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
 async function boot(q){
   await flushQ();
-  if(pend()){if(!cats.length&&!prods.length){const c=load('pos3_cache',null);if(c)({cos,users,cats,prods,sales,expenses,moves,logs,rets,session}=c)}return}
-  try{const r=await api('GET','/api/data',null,q);cos=[r.company];users=r.users;cats=r.cats;prods=r.prods;sales=r.sales;expenses=r.expenses||[];rets=r.rets||[];moves=r.moves||[];logs=r.logs||[];session=r.me;cacheState()}
-  catch(e){const c=load('pos3_cache',null);if(e.net&&c&&token)({cos,users,cats,prods,sales,expenses,moves,logs,rets,session}=c);else throw e}}
+  if(pend()){if(!cats.length&&!prods.length){const c=load('pos3_cache',null);if(c)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,session}=c)}return}
+  try{const r=await api('GET','/api/data',null,q);cos=[r.company];users=r.users;cats=r.cats;prods=r.prods;sales=r.sales;expenses=r.expenses||[];branches=r.branches||[];rets=r.rets||[];moves=r.moves||[];logs=r.logs||[];session=r.me;cacheState()}
+  catch(e){const c=load('pos3_cache',null);if(e.net&&c&&token)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,session}=c);else throw e}}
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=n=>(n<0?'-':'')+'$'+Math.abs(Number(n)).toFixed(2);
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
@@ -134,11 +136,19 @@ function toast(m,type){type=type||(/not |cannot|fail|invalid|only |less than|exi
   let h=document.getElementById('toasts');if(!h){h=document.createElement('div');h.id='toasts';h.className='toasts';document.body.appendChild(h)}
   const t=document.createElement('div');t.className='toast t-'+type;t.innerHTML='<span>'+({ok:'✔',warn:'⚠',err:'✖'}[type])+'</span>'+esc(m);h.appendChild(t);setTimeout(()=>t.remove(),2600)}
 
-const PERM={admin:['sell','products','stock','report','users','expenses','history','lowstock','audit','backup'],manager:['sell','products','stock','report','expenses','history','lowstock'],cashier:['sell','stock','lowstock']};
-const TABS={sell:'Sell',products:'Products',stock:'Stock',report:'Reports',users:'Users',expenses:'Expenses',history:'Stock history',lowstock:'Low stock',audit:'Audit log',backup:'Backup & export'};
-let cos=[],users=[],cats=[],prods=[],sales=[],expenses=[],moves=[],logs=[],rets=[],recovery='';
+const PERM={admin:['sell','products','stock','report','users','expenses','history','lowstock','stockrep','audit','backup','branches'],manager:['sell','products','stock','report','expenses','history','lowstock','stockrep'],cashier:['sell','stock','lowstock']};
+const TABS={sell:'Sell',products:'Products',stock:'Stock',report:'Reports',users:'Users',expenses:'Expenses',history:'Stock history',lowstock:'Low stock',stockrep:'Stock report',audit:'Audit log',backup:'Backup & export',branches:'Branches'};
+let cos=[],users=[],cats=[],prods=[],sales=[],expenses=[],moves=[],logs=[],rets=[],recovery='',branches=[],curBr='';
 let session=null,mode='login',err='',tab='sell',cart=[],filt='',from='',to='',wk=0,rc=null,U=null,C=null,q='',pg={},ps=10,md=null,mdx=null,disc={on:false,type:'%',val:''},pays=[{m:'Cash',amt:'',ref:''}],pay='Cash',paid='',cust={name:'',phone:'',note:''};
 const mine=a=>a.filter(x=>x.co===C.code);
+const cmine=mine;
+const bmine=a=>a.filter(x=>x.co===C.code&&(curBr==='all'||x.br===curBr));
+const allowedBr=()=>U.role==='admin'?branches.map(b=>b.id):(U.br||[]);
+const brName=id=>(branches.find(b=>b.id===id)||{name:'-'}).name;
+const BR=()=>curBr==='all'?(allowedBr()[0]||''):curBr;
+const BONLY=['sell','products','stock'];
+function pickBr(){const al=allowedBr(),sv=load('pos3_br_'+U.id,null);curBr=(sv==='all'&&al.length>1)||al.includes(sv)?sv:(al[0]||'')}
+const BRCK=sel=>branches.map(b=>`<label class="chk"><input type="checkbox" name="br_${b.id}" ${sel.includes(b.id)?'checked':''}> ${esc(b.name)}</label>`).join('');
 const can=p=>PERM[U.role].includes(p);
 const PAY=[['Cash','💵'],['Mobile Money','📱'],['Card','💳'],['Bank','🏦']];
 const cartSub=()=>cart.reduce((x,c)=>x+c.price*c.qty,0);
@@ -167,7 +177,7 @@ function scan(cb){
     }else{await loadZX();reader=new ZXing.BrowserMultiFormatReader();$('#scs').textContent='Point the camera at a barcode…';reader.decodeFromVideoDevice(null,'scv',r=>{if(r)end(r.getText())})}
   }catch(e){const m=$('#scs');if(m)m.textContent='Camera unavailable - type the barcode instead.'}})();
 }
-const findCode=v=>{v=String(v).trim().toLowerCase();return v&&mine(prods).find(x=>x.code&&x.code.toLowerCase()===v)};
+const findCode=v=>{v=String(v).trim().toLowerCase();return v&&bmine(prods).find(x=>x.code&&x.code.toLowerCase()===v)};
 const lockKey=()=>'pos3_lock_'+(U?U.id:'');
 const lockCfg=()=>U?load(lockKey(),null):null;
 function lockView(){return `<div class="lock"><form data-form="unlock" class="card" style="width:100%;max-width:340px"><div class="ctr"><div class="logo">🔒</div><h2>Locked</h2><p class="mut" style="margin:0 0 12px">${esc(U.name)} — enter your PIN</p></div><input name="pin" type="password" inputmode="numeric" maxlength="6" placeholder="PIN" autocomplete="off" required><div class="err">${esc(err)}</div><button class="pri" style="width:100%">Unlock</button><p class="ctr" style="margin:12px 0 0"><a href="#" data-act="logout">Log out instead</a></p></form></div>`}
@@ -210,24 +220,25 @@ setInterval(()=>{const c=lockCfg();if(U&&!lk&&c&&c.mins&&Date.now()-lastAct>c.mi
 
 const EXC=['Rent','Transport','Salaries','Utilities','Supplies','Marketing','Other'];
 const PWF=n=>`<div class="pw"><input name="${n}" type="${showpw?'text':'password'}" data-pw minlength="4" required><button type="button" data-act="showpw" aria-label="Show or hide password">${showpw?EYEOFF:EYE}</button></div>`;
-const rfOf=id=>mine(rets).filter(x=>x.sid===id).reduce((a,e)=>a+e.amt,0);
-function retQty(sl){const o={};mine(rets).filter(x=>x.sid===sl.id).forEach(r=>r.items.forEach(i=>{o[i.id]=(o[i.id]||0)+i.qty}));return o}
+const rfOf=id=>bmine(rets).filter(x=>x.sid===id).reduce((a,e)=>a+e.amt,0);
+function retQty(sl){const o={};bmine(rets).filter(x=>x.sid===sl.id).forEach(r=>r.items.forEach(i=>{o[i.id]=(o[i.id]||0)+i.qty}));return o}
 function rec(coll,arr){({moves,logs,rets}[coll]).push(...arr);api('PUT','/api/'+coll,arr,true,true).catch(e=>toast(e.message,'err'));cacheState()}
-const audit=(act,detail)=>rec('logs',[{id:uid(),co:C.code,ts:Date.now(),by:U.name,act,detail}]);
-const mv=(p,qty,type,ref,note)=>({id:uid(),co:C.code,ts:Date.now(),pid:p.id,name:dn(p),qty,type,ref:ref||'',note:note||'',after:p.stock,by:U.name});
-const heldKey=()=>'pos3_held_'+C.code,getHeld=()=>load(heldKey(),[]);
-const lowCount=()=>mine(prods).filter(p=>p.stock<=lowN).length;
-const MT={sale:'Sale',add:'Stock added',initial:'Opening stock',void:'Receipt deleted',return:'Customer return',adjust:'Adjustment'};
+const audit=(act,detail)=>rec('logs',[{id:uid(),co:C.code,br:BR(),ts:Date.now(),by:U.name,act,detail}]);
+const mv=(p,qty,type,ref,note)=>({id:uid(),co:C.code,br:p.br||BR(),ts:Date.now(),pid:p.id,name:dn(p),qty,type,ref:ref||'',note:note||'',after:p.stock,by:U.name});
+const heldKey=()=>'pos3_held_'+C.code+'_'+curBr,getHeld=()=>load(heldKey(),[]);
+const lowCount=()=>bmine(prods).filter(p=>p.stock<=lowN).length;
+const MT={transfer:'Branch transfer',sale:'Sale',add:'Stock added',initial:'Opening stock',void:'Receipt deleted',return:'Customer return',adjust:'Adjustment'};
 const csvCell=v=>{v=v==null?'':String(v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v};
 function dlFile(name,text,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),2000)}
 function dl(name,rows){dlFile(name+'-'+day(Date.now())+'.csv','\ufeff'+rows.map(r=>r.map(csvCell).join(',')).join('\n'),'text/csv');toast('Exported '+name)}
 function exportCSV(k,all){const inr=ts=>all||((!from||day(ts)>=from)&&(!to||day(ts)<=to)),D=ts=>new Date(ts).toLocaleString();
-  if(k==='sales')return dl('sales',[['Receipt','Date','Cashier','Customer','Phone','Payment','Items','Subtotal','Discount','Total','Profit']].concat(mine(sales).filter(s=>inr(s.ts)).sort((a,b)=>a.ts-b.ts).map(s=>[s.no,D(s.ts),s.by,s.cust?s.cust.name:'',s.cust?s.cust.phone:'',s.pay||'Cash',s.items.map(i=>i.qty+'x '+i.name).join('; '),s.sub||s.total,s.disc||0,s.total,s.profit])));
-  if(k==='products')return dl('products',[['Category','Product','Barcode','Buying price','Selling price','Stock']].concat(mine(prods).map(p=>[catName(p.cat),tc(p.name),p.code||'',p.buy,p.price,p.stock])));
-  if(k==='expenses')return dl('expenses',[['Date','Category','Note','Amount','By']].concat(mine(expenses).sort((a,b)=>a.ts-b.ts).map(e=>[day(e.ts),e.cat,e.note||'',e.amt,e.by])));
-  if(k==='moves')return dl('stock-history',[['Date','Product','Type','Change','Stock after','Reference','Note','By']].concat(mine(moves).sort((a,b)=>a.ts-b.ts).map(m=>[D(m.ts),m.name,MT[m.type]||m.type,m.qty,m.after,m.ref,m.note,m.by])));
-  if(k==='logs')return dl('audit-log',[['Date','User','Action','Detail']].concat(mine(logs).sort((a,b)=>a.ts-b.ts).map(l=>[D(l.ts),l.by,l.act,l.detail])));
-  if(k==='rets')return dl('refunds',[['Date','Receipt','Items','Amount','Method','Reason','By']].concat(mine(rets).sort((a,b)=>a.ts-b.ts).map(r=>[D(r.ts),r.no,r.items.map(i=>i.qty+'x '+i.name).join('; '),r.amt,r.method,r.reason,r.by])))}
+  if(k==='sales')return dl('sales',[['Receipt','Date','Cashier','Customer','Phone','Payment','Items','Subtotal','Discount','Total','Profit','Branch']].concat(bmine(sales).filter(s=>inr(s.ts)).sort((a,b)=>a.ts-b.ts).map(s=>[s.no,D(s.ts),s.by,s.cust?s.cust.name:'',s.cust?s.cust.phone:'',s.pay||'Cash',s.items.map(i=>i.qty+'x '+i.name).join('; '),s.sub||s.total,s.disc||0,s.total,s.profit,brName(s.br)])));
+  if(k==='products')return dl('products',[['Category','Product','Barcode','Buying price','Selling price','Stock']].concat(bmine(prods).map(p=>[catName(p.cat),tc(p.name),p.code||'',p.buy,p.price,p.stock])));
+  if(k==='expenses')return dl('expenses',[['Date','Category','Note','Amount','By']].concat(bmine(expenses).sort((a,b)=>a.ts-b.ts).map(e=>[day(e.ts),e.cat,e.note||'',e.amt,e.by])));
+  if(k==='moves')return dl('stock-history',[['Date','Product','Type','Change','Stock after','Reference','Note','By']].concat(bmine(moves).sort((a,b)=>a.ts-b.ts).map(m=>[D(m.ts),m.name,MT[m.type]||m.type,m.qty,m.after,m.ref,m.note,m.by])));
+  if(k==='logs')return dl('audit-log',[['Date','User','Action','Detail']].concat(bmine(logs).sort((a,b)=>a.ts-b.ts).map(l=>[D(l.ts),l.by,l.act,l.detail])));
+  if(k==='stockrep'){const A=stockAgg(),on=A.filter(a=>!a.ex),sm=k2=>on.reduce((x,a)=>x+a[k2],0);return dl('stock-report',[['Category','Products','Units','Stock cost','Retail value','Potential profit','Counted in total']].concat(A.map(a=>[tc(a.c.name),a.n,a.u,a.cost,a.val,a.val-a.cost,a.ex?'No':'Yes']),[['TOTAL (counted)',sm('n'),sm('u'),sm('cost'),sm('val'),sm('val')-sm('cost'),'']]))}
+  if(k==='rets')return dl('refunds',[['Date','Receipt','Items','Amount','Method','Reason','By']].concat(bmine(rets).sort((a,b)=>a.ts-b.ts).map(r=>[D(r.ts),r.no,r.items.map(i=>i.qty+'x '+i.name).join('; '),r.amt,r.method,r.reason,r.by])))}
 function addCart(p,n=1){const l=cart.find(x=>x.id===p.id),have=l?l.qty:0;if(have+n>p.stock){toast('Only '+p.stock+' of '+p.name+' in stock','warn');return false}l?l.qty+=n:cart.push({id:p.id,qty:n,price:p.price});toast('Added '+p.name,'ok');return true}
 const tc=s=>String(s).toLowerCase().replace(/(^|[\s\-\/(])([a-z])/g,(m,a,b)=>a+b.toUpperCase());
 const catName=id=>tc((cats.find(c=>c.id===id)||{name:'—'}).name);
@@ -235,16 +246,17 @@ const dn=p=>{const c=cats.find(x=>x.id===p.cat);return (c?tc(c.name)+' · ':'')+
 const dtv=ts=>{const d=new Date(ts);d.setMinutes(d.getMinutes()-d.getTimezoneOffset());return d.toISOString().slice(0,16)};
 const hueOf=id=>{const c=cats.find(x=>x.id===id);if(!c)return 220;if(c.hue!=null)return c.hue;let h=0;for(const ch of c.id)h=(h*31+ch.charCodeAt(0))%360;return h};
 const catTag=id=>`<span class="tag" style="--h:${hueOf(id)}">${esc(catName(id))}</span>`;
-function newHue(){const used=mine(cats).map(c=>hueOf(c.id));let h=0;for(let i=0;i<40;i++){h=Math.round(((used.length+i)*137.508+20)%360);if(used.every(u=>{const d=Math.abs(u-h);return Math.min(d,360-d)>=28}))break}return h}
+function newHue(){const used=bmine(cats).map(c=>hueOf(c.id));let h=0;for(let i=0;i<40;i++){h=Math.round(((used.length+i)*137.508+20)%360);if(used.every(u=>{const d=Math.abs(u-h);return Math.min(d,360-d)>=28}))break}return h}
 function ask(msg,fn,rr){const d=document.createElement('div');d.className='cfm';d.style.zIndex=420;d.innerHTML=`<div class="card" style="max-width:340px;width:100%;margin-top:15vh"><h2>Please confirm</h2><p>${esc(msg)}</p><div class="row"><button id="cfn">No</button><button class="pri" id="cfy">Yes</button></div></div>`;document.body.appendChild(d);
   $('#cfy').onclick=async()=>{d.remove();try{await fn()}catch(e){toast(e.message,'err')}render()};$('#cfn').onclick=()=>{d.remove();if(rr)render()}}
 
-let theme=load('pos2_theme','auto'),dr=false,mq='',showpw=false,lk=false,needUnlock=true,lastAct=Date.now(),lowN=load('pos3_lown',5);
+let theme=load('pos2_theme','auto'),dr=false,mq='',showpw=false,lk=false,needUnlock=true,lastAct=Date.now(),lowN=load('pos3_lown',5),yr=new Date().getFullYear();
 const applyTheme=()=>{const r=document.documentElement;if(theme==='auto')r.removeAttribute('data-theme');else r.dataset.theme=theme};
 function render(){
   U=users.find(x=>x.id===session);C=U&&cos.find(c=>c.code===U.co);
   if(!U||!C){U=C=null;$('#app').innerHTML=authView();return}
   if(needUnlock){needUnlock=false;if(lockCfg())lk=true}
+  if(!curBr||(curBr!=='all'&&!allowedBr().includes(curBr))||(curBr==='all'&&allowedBr().length<2))pickBr();
   if(!can(tab))tab='sell';
   $('#app').innerHTML=shell()+(dr?drawerView():'')+(md?mdView():'')+(rc?receiptModal():'')+(lk?lockView():'');enhance();if(lk){const pi=document.querySelector('.lock input');if(pi)pi.focus()}
 }
@@ -261,28 +273,46 @@ function authView(){
 function shell(){
   const main=['sell','report'].filter(can),tabs=main.includes(tab)?main:[...main,tab];
   return `<nav><div class="tabs">${tabs.map(t=>`<button class="${tab===t?'act':''}" data-act="tab" data-id="${t}">${TABS[t]}</button>`).join('')}</div><button class="gear" data-act="drawer" aria-label="Settings">⚙️</button></nav>
-  ${{sell:sellView,products:prodView,stock:stockView,report:reportView,users:userView,expenses:expensesView,history:historyView,lowstock:lowView,audit:auditView,backup:backupView}[tab]()}
-  <footer class="bar"><div><b>🧾 ${esc(C.name)}</b><br><small class="mut">${esc(U.name)}</small><span class="badge">${U.role}</span>${pill()}</div></footer>`;
+  ${(curBr==='all'&&BONLY.includes(tab))?branchNotice():{sell:sellView,products:prodView,stock:stockView,report:reportView,users:userView,expenses:expensesView,history:historyView,lowstock:lowView,stockrep:stockRepView,audit:auditView,backup:backupView,branches:branchesView}[tab]()}
+  <footer class="bar"><div><b>🧾 ${esc(C.name)}</b><br><small class="mut">${esc(U.name)} · ${curBr==='all'?'All branches':esc(brName(curBr))}</small><span class="badge">${U.role}</span>${pill()}</div></footer>`;
 }
-function expensesView(){const L=mine(expenses).sort((a,b)=>b.ts-a.ts),tot=L.reduce((x,e)=>x+e.amt,0);
+const MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const getEx=()=>load('pos3_ex_'+C.code,[]);
+function stockAgg(){const ex=getEx();return bmine(cats).map(c=>{const L=bmine(prods).filter(p=>p.cat===c.id);return{c,n:L.length,u:L.reduce((x,p)=>x+p.stock,0),cost:L.reduce((x,p)=>x+p.stock*p.buy,0),val:L.reduce((x,p)=>x+p.stock*p.price,0),ex:ex.includes(c.id)}})}
+function chartM(ms){const W=340,H=170,pad=6,top=22,mx=Math.max(1,...ms.map(d=>d.rev)),g=(W-pad*2)/ms.length,bw=9,h=H-top-22;
+  const k=v=>v>=1e6?(v/1e6).toFixed(1)+'M':v>=1e3?(v/1e3).toFixed(v>=1e4?0:1)+'k':String(Math.round(v));
+  let o=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Monthly sales chart"><line x1="0" x2="${W}" y1="${top+h}" y2="${top+h}" stroke="var(--bd)"/>`;
+  ms.forEach((d,i)=>{const x=pad+i*g+g/2,a=d.rev/mx*h,b=Math.max(d.profit,0)/mx*h;
+    o+=`<rect class="b1" x="${x-bw-.5}" y="${top+h-a}" width="${bw}" height="${a}" rx="2"/><rect class="b2" x="${x+.5}" y="${top+h-b}" width="${bw}" height="${b}" rx="2"/><text x="${x}" y="${top+h-Math.max(a,b)-3}" text-anchor="middle">${d.rev?k(d.rev):''}</text><text x="${x}" y="${H-8}" text-anchor="middle">${MN[d.m]}</text>`});
+  return o+'</svg>'}
+function stockRepView(){
+  const A=stockAgg(),on=A.filter(a=>!a.ex),off=A.filter(a=>a.ex),sm=(L,k)=>L.reduce((x,a)=>x+a[k],0),ex=getEx();
+  const P=bmine(prods).map(p=>({p,ex:ex.includes(p.cat)}));
+  return `<div class="card"><div class="stats"><div class="stat"><span class="mut">Stock cost (counted)</span><b>${money(sm(on,'cost'))}</b></div><div class="stat"><span class="mut">Retail value</span><b>${money(sm(on,'val'))}</b></div><div class="stat"><span class="mut">Potential profit</span><b class="pos">${money(sm(on,'val')-sm(on,'cost'))}</b></div><div class="stat"><span class="mut">Units in stock</span><b>${sm(on,'u')}</b></div></div>${off.length?`<p class="mut" style="margin:10px 0 0">Left out of these totals: ${off.map(a=>esc(tc(a.c.name))).join(', ')}</p>`:''}</div>
+  <div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Stock by category</h2><button data-act="exp" data-id="stockrep-all">Export CSV</button></div><p class="mut" style="margin-top:0">Untick <b>Count in total</b> to leave a category out of the overall total.</p><div class="tblw">${A.length?`<table><tr><th>Category</th><th>Branch</th><th class="r">Products</th><th class="r">Units</th><th class="r">Stock cost</th><th class="r">Retail value</th><th class="r">Potential profit</th><th>Count in total</th></tr>${A.map(a=>`<tr class="cr${a.ex?' exm':''}" style="--h:${hueOf(a.c.id)}"><td>${catTag(a.c.id)}</td><td>${esc(brName(a.c.br))}</td><td class="r">${a.n}</td><td class="r">${a.u}</td><td class="r">${money(a.cost)}</td><td class="r">${money(a.val)}</td><td class="r">${money(a.val-a.cost)}</td><td><input type="checkbox" data-change="ex" data-id="${a.c.id}" ${a.ex?'':'checked'}></td></tr>`).join('')}<tfoot><tr><td>Overall total (counted)</td><td></td><td class="r">${sm(on,'n')}</td><td class="r">${sm(on,'u')}</td><td class="r">${money(sm(on,'cost'))}</td><td class="r">${money(sm(on,'val'))}</td><td class="r">${money(sm(on,'val')-sm(on,'cost'))}</td><td></td></tr>${off.length?`<tr><td>Left out (exempt)</td><td></td><td class="r">${sm(off,'n')}</td><td class="r">${sm(off,'u')}</td><td class="r">${money(sm(off,'cost'))}</td><td class="r">${money(sm(off,'val'))}</td><td class="r">${money(sm(off,'val')-sm(off,'cost'))}</td><td></td></tr>`:''}</tfoot></table>`:'<p class="mut">No categories yet.</p>'}</div></div>
+  <div class="card"><h2>Stock by product</h2><div class="tblw">${P.length?`<table><tr><th>Product</th><th>Branch</th><th class="r">Stock</th><th class="r">Buying price</th><th class="r">Stock cost</th><th class="r">Retail value</th><th>Counted</th></tr>${P.map(({p,ex:e})=>`<tr class="cr${e?' exm':''}" style="--h:${hueOf(p.cat)}"><td>${esc(dn(p))}</td><td>${esc(brName(p.br))}</td><td class="r">${p.stock}</td><td class="r">${money(p.buy)}</td><td class="r">${money(p.stock*p.buy)}</td><td class="r">${money(p.stock*p.price)}</td><td>${e?'Exempt':'Yes'}</td></tr>`).join('')}</table>`:'<p class="mut">No products yet.</p>'}</div></div>`}
+function branchNotice(){return `<div class="card"><h2>Choose a branch</h2><p class="mut" style="margin-top:0">Selling and stock changes happen in one branch at a time. Pick a branch to continue.</p><div class="row" style="flex-wrap:wrap;justify-content:flex-start">${allowedBr().map(i=>`<button class="pri" data-act="setbr" data-id="${i}">${esc(brName(i))}</button>`).join('')}</div></div>`}
+function branchesView(){
+  return `<div class="card"><div class="row" style="margin-bottom:10px;flex-wrap:wrap"><h2 style="margin:0">Branches (${branches.length})</h2><span><button data-act="open" data-id="xfer">Transfer stock</button> <button data-act="open" data-id="copycat">Copy products</button> <button class="pri" data-act="open" data-id="br">+ Branch</button></span></div><div class="tblw"><table><tr><th>Branch</th><th>Location</th><th class="r">Products</th><th class="r">Sales</th><th class="r">Stock cost</th><th></th></tr>${branches.map(b=>{const P=cmine(prods).filter(p=>p.br===b.id);return `<tr><td>${esc(b.name)}</td><td>${esc(b.loc||'')}</td><td class="r">${P.length}</td><td class="r">${cmine(sales).filter(x=>x.br===b.id).length}</td><td class="r">${money(P.reduce((x,p)=>x+p.stock*p.buy,0))}</td><td class="r" style="white-space:nowrap"><button data-act="open" data-id="br" data-x="${b.id}">Edit</button> <button class="del" data-act="delbr" data-id="${b.id}">Delete</button></td></tr>`}).join('')}</table></div></div>`}
+function expensesView(){const L=bmine(expenses).sort((a,b)=>b.ts-a.ts),tot=L.reduce((x,e)=>x+e.amt,0);
   return `<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Expenses · ${money(tot)}</h2><button class="pri" data-act="open" data-id="exp">+ Expense</button></div><div class="tblw">${L.length?`<table><tr><th>Date</th><th>Category</th><th>Note</th><th class="r">Amount</th><th>By</th><th></th></tr>${L.map(e=>`<tr><td data-v="${e.ts}">${esc(day(e.ts))}</td><td>${esc(e.cat)}</td><td>${esc(e.note||'')}</td><td class="r">${money(e.amt)}</td><td>${esc(e.by)}</td><td class="r"><button class="del" data-act="delexp" data-id="${e.id}">Delete</button></td></tr>`).join('')}<tfoot><tr><td colspan="3">Total</td><td class="r">${money(tot)}</td><td colspan="2"></td></tr></tfoot></table>`:'<p class="mut">No expenses recorded yet.</p>'}</div></div>`}
-function historyView(){const L=mine(moves).sort((a,b)=>b.ts-a.ts);
+function historyView(){const L=bmine(moves).sort((a,b)=>b.ts-a.ts);
   return `<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Stock history</h2><span><button data-act="open" data-id="adj">Adjust stock</button> <button data-act="exp" data-id="moves-all">Export CSV</button></span></div><div class="tblw">${L.length?`<table><tr><th>Date</th><th>Product</th><th>Type</th><th class="r">Change</th><th class="r">Stock after</th><th>Reference</th><th>By</th></tr>${L.map(m=>`<tr><td data-v="${m.ts}">${new Date(m.ts).toLocaleString()}</td><td>${esc(m.name)}</td><td>${esc(MT[m.type]||m.type)}</td><td class="r ${m.qty<0?'neg':'pos'}">${m.qty>0?'+':''}${m.qty}</td><td class="r">${m.after}</td><td>${esc((m.ref||'')+(m.note?' '+m.note:''))}</td><td>${esc(m.by)}</td></tr>`).join('')}</table>`:'<p class="mut">No stock movements recorded yet.</p>'}</div></div>`}
-function lowView(){const L=mine(prods).filter(p=>p.stock<=lowN).sort((a,b)=>a.stock-b.stock);
+function lowView(){const L=bmine(prods).filter(p=>p.stock<=lowN).sort((a,b)=>a.stock-b.stock);
   return `<div class="card"><div class="row" style="margin-bottom:10px;flex-wrap:wrap"><h2 style="margin:0">Low stock (${L.length})</h2><div class="row"><label>At or below</label><select data-change="lown" style="width:auto;margin:0">${[3,5,10,20].map(n=>`<option ${lowN===n?'selected':''}>${n}</option>`).join('')}</select><button data-act="sharelow">Share list</button></div></div><div class="tblw">${L.length?`<table><tr><th>Product</th><th>Barcode</th><th class="r">Stock</th><th>Status</th><th></th></tr>${L.map(p=>`<tr class="cr" style="--h:${hueOf(p.cat)}"><td>${esc(dn(p))}</td><td>${esc(p.code||'—')}</td><td class="r">${p.stock}</td><td class="${p.stock<1?'out':'low'}">${p.stock<1?'Out of stock':'Low'}</td><td class="r"><button data-act="open" data-id="stock" data-x="${p.id}">+ Stock</button></td></tr>`).join('')}</table>`:'<p class="mut">Nothing is running low.</p>'}</div></div>`}
-function auditView(){const L=mine(logs).sort((a,b)=>b.ts-a.ts);
+function auditView(){const L=bmine(logs).sort((a,b)=>b.ts-a.ts);
   return `<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Audit log</h2><button data-act="exp" data-id="logs-all">Export CSV</button></div><div class="tblw">${L.length?`<table><tr><th>Date</th><th>User</th><th>Action</th><th>Detail</th></tr>${L.map(l=>`<tr><td data-v="${l.ts}">${new Date(l.ts).toLocaleString()}</td><td>${esc(l.by)}</td><td>${esc(l.act)}</td><td>${esc(l.detail||'')}</td></tr>`).join('')}</table>`:'<p class="mut">Nothing logged yet.</p>'}</div></div>`}
 function backupView(){const b=(k,t)=>`<button data-act="exp" data-id="${k}-all">${t}</button>`;
   return `<div class="card"><h2>Export to CSV</h2><p class="mut" style="margin-top:0">Opens in Excel or Google Sheets.</p><div class="row" style="flex-wrap:wrap;justify-content:flex-start">${b('sales','Sales')}${b('products','Products &amp; stock')}${b('expenses','Expenses')}${b('rets','Refunds')}${b('moves','Stock history')}${b('logs','Audit log')}</div></div>
   <div class="card"><h2>Backup</h2><p class="mut" style="margin-top:0">One file with all your categories, products, sales, expenses, refunds and logs. Keep it somewhere safe.</p><button class="pri" data-act="backupjson">Download full backup</button></div>
   <div class="card"><h2>Restore from backup</h2><p class="mut" style="margin-top:0">This replaces ALL current data for this company with the file's contents. Users and passwords are not changed.</p><input type="file" id="rf" accept="application/json,.json"><button class="del" data-act="restore">Restore backup</button></div>`}
 function drawerView(){
-  const items=[['products','📦','Products & categories'],['stock','📥','Stock levels'],['lowstock','⚠️','Low stock ('+lowCount()+')'],['history','📜','Stock history'],['expenses','💸','Expenses'],['users','👥','Users & roles'],['audit','🕵️','Audit log'],['backup','💾','Backup & export']].filter(x=>can(x[0]));
+  const items=[['products','📦','Products & categories'],['stock','📥','Stock levels'],['lowstock','⚠️','Low stock ('+lowCount()+')'],['stockrep','📊','Stock report'],['history','📜','Stock history'],['expenses','💸','Expenses'],['users','👥','Users & roles'],['audit','🕵️','Audit log'],['branches','🏬','Branches'],['backup','💾','Backup & export']].filter(x=>can(x[0]));
   const qa=[['cat','🏷️','New category','products'],['prod','➕','New product','products'],['stock','📥','Add stock','stock'],['user','👤','Register user','users']].filter(x=>can(x[3]));
-  const off=x=>(x[0]==='prod'&&!mine(cats).length)||(x[0]==='stock'&&!mine(prods).length);
+  const off=x=>(x[0]==='prod'&&!bmine(cats).length)||(x[0]==='stock'&&!bmine(prods).length);
   return `<div class="drbg"><aside class="drawer"><div class="row" style="margin-bottom:12px"><h2 style="margin:0">⚙️ Settings</h2><button data-act="closed">✕</button></div>
   <div class="dcard"><b>${esc(C.name)}</b><br><small class="mut">${esc(C.loc)} · ${esc(C.phone)}</small><br><small class="mut"><i>${esc(C.motto)}</i></small><div style="margin-top:8px">${esc(U.name)} <span class="badge">${U.role}</span></div></div>
-  ${items.length?`<div class="dh">Manage</div>${items.map(x=>`<button class="ditem" data-act="tab" data-id="${x[0]}"><span>${x[1]}</span>${x[2]}</button>`).join('')}`:''}
+  ${allowedBr().length>1?`<div class="dh">Branch</div>${[...allowedBr().map(i=>[i,brName(i)]),['all','All branches (reports)']].map(([i,n])=>`<button class="ditem ${curBr===i?'act':''}" data-act="setbr" data-id="${i}"><span>🏬</span>${esc(n)}</button>`).join('')}`:''}${items.length?`<div class="dh">Manage</div>${items.map(x=>`<button class="ditem" data-act="tab" data-id="${x[0]}"><span>${x[1]}</span>${x[2]}</button>`).join('')}`:''}
   <div class="dh">Quick add</div>${qa.map(x=>`<button class="ditem" data-act="open" data-id="${x[0]}" ${off(x)?'disabled':''}><span>${x[1]}</span>${x[2]}</button>`).join('')}
   <div class="dh">Appearance</div><div class="row" style="gap:6px">${['auto','light','dark'].map(m=>`<button class="${theme===m?'act':''}" style="flex:1" data-act="theme" data-id="${m}">${m}</button>`).join('')}</div>
   <div class="dh">Security</div><button class="ditem" data-act="open" data-id="pin"><span>🔒</span>${lockCfg()?'Change PIN':'Set PIN lock'}</button>${lockCfg()?`<button class="ditem" data-act="lockn"><span>🔐</span>Lock now</button><button class="ditem del" data-act="rmpin"><span>✕</span>Remove PIN</button>`:''}
@@ -292,8 +322,8 @@ function pager(key,n){return {a:0,b:1e9,html:''}}
 function sellView(){
   const lines=cart.map(c=>({...c,p:prods.find(p=>p.id===c.id)})).filter(c=>c.p);
   const total=lines.reduce((a,c)=>a+c.price*c.qty,0),n=q.trim().toLowerCase(),tm=n.split(/\s+/).filter(Boolean);
-  const avail=mine(prods).filter(p=>p.stock>0),hay=p=>(p.name+' '+catName(p.cat)+' '+(p.code||'')).toLowerCase();
-  const cl=mine(cats).filter(c=>{const ps=avail.filter(p=>p.cat===c.id);return ps.length&&(!tm.length||tm.every(w=>c.name.toLowerCase().includes(w)||ps.some(p=>hay(p).includes(w))))});
+  const avail=bmine(prods).filter(p=>p.stock>0),hay=p=>(p.name+' '+catName(p.cat)+' '+(p.code||'')).toLowerCase();
+  const cl=bmine(cats).filter(c=>{const ps=avail.filter(p=>p.cat===c.id);return ps.length&&(!tm.length||tm.every(w=>c.name.toLowerCase().includes(w)||ps.some(p=>hay(p).includes(w))))});
   const list=tm.length?avail.filter(p=>tm.every(w=>hay(p).includes(w))):[];
   const pr=pager('sell',list.length),cp=pager('scat',cl.length);
   return `<div class="card cart"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Cart${lines.length?' ('+lines.reduce((a,c)=>a+c.qty,0)+' items)':''}</h2><div>${lines.length?'<button data-act="hold">Hold</button> ':''}<button data-act="open" data-id="held">Held (${getHeld().length})</button></div></div>
@@ -311,12 +341,12 @@ function sellView(){
   ${list.length?`<h2 style="margin-top:14px">Matching products</h2><div class="tblw"><table><tr><th>Product</th><th class="r">Price</th><th></th></tr>${list.slice(pr.a,pr.b).map(p=>`<tr class="cr" style="--h:${hueOf(p.cat)}"><td>${esc(dn(p))}</td><td class="r">${money(p.price)}</td><td class="r"><button class="pri" data-act="add" data-id="${p.id}">Add</button></td></tr>`).join('')}</table></div>${pr.html}`:''}</div>`;
 }
 function prodView(){
-  const P=mine(prods),G=mine(cats),a=pager('cat',G.length);
+  const P=bmine(prods),G=bmine(cats),a=pager('cat',G.length);
   return `<div class="card row" style="flex-wrap:wrap"><h2 style="margin:0">Categories &amp; products</h2><div><button class="pri" data-act="open" data-id="cat">+ Category</button> <button class="pri" data-act="open" data-id="prod" ${G.length?'':'disabled'}>+ Product</button></div></div>
   <div class="card"><div class="tblw">${G.length?`<table><tr><th>Category</th><th class="r">Products</th><th></th></tr>${G.slice(a.a,a.b).map(c=>{const n=P.filter(p=>p.cat===c.id).length;return `<tr class="cr" style="--h:${hueOf(c.id)}"><td>${catTag(c.id)}</td><td class="r">${n}</td><td class="r" style="white-space:nowrap"><button class="pri" data-act="open" data-id="cprods" data-x="${c.id}">View products</button> <button data-act="open" data-id="prod" data-x="${c.id}">+ Product</button> <button class="del" data-act="delcat" data-id="${c.id}">Delete</button></td></tr>`}).join('')}</table>`:'<p class="mut">No categories yet. Add one to get started.</p>'}</div>${G.length?a.html:''}</div>`;
 }
 function stockView(){
-  const P=mine(prods),a=pager('stock',P.length);
+  const P=bmine(prods),a=pager('stock',P.length);
   return `<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Stock levels</h2><button class="pri" data-act="open" data-id="stock" ${P.length?'':'disabled'}>+ Add stock</button></div><div class="tblw">${P.length?`<table><tr><th>Product</th><th>Barcode</th><th class="r">Stock</th><th></th></tr>${P.slice(a.a,a.b).map(p=>`<tr class="cr" style="--h:${hueOf(p.cat)}"><td>${esc(dn(p))}</td><td>${esc(p.code||'—')}</td><td class="r ${p.stock<1?'out':p.stock<=5?'low':''}">${p.stock}</td><td class="r"><button data-act="open" data-id="stock" data-x="${p.id}">+ Stock</button></td></tr>`).join('')}</table>`:'<p class="mut">No products yet.</p>'}</div>${a.html}</div>`;
 }
 function chart(days){
@@ -328,7 +358,7 @@ function chart(days){
   return s+'</svg>';
 }
 function reportView(){
-  const all=mine(sales),today=day(Date.now());
+  const all=bmine(sales),today=day(Date.now());
   const list=all.filter(s=>(!from||day(s.ts)>=from)&&(!to||day(s.ts)<=to)).sort((a,b)=>b.ts-a.ts);
   const sum=a=>({rev:a.reduce((x,s)=>x+s.total,0),profit:a.reduce((x,s)=>x+s.profit,0)});
   const t=sum(all.filter(s=>day(s.ts)===today)),r=sum(list);
@@ -338,25 +368,29 @@ function reportView(){
   const byDay={};list.forEach(s=>{const d=day(s.ts),o=byDay[d]||(byDay[d]={n:0,rev:0,profit:0});o.n++;o.rev+=s.total;o.profit+=s.profit});
   const dk=Object.keys(byDay).sort().reverse(),dp=pager('dp',dk.length),tx=pager('tx',list.length);
   const items=list.reduce((x,s)=>x+s.items.reduce((y,i)=>y+i.qty,0),0),disc=list.reduce((x,s)=>x+(s.disc||0),0),sub=list.reduce((x,s)=>x+(s.sub||s.total),0);
-  const inr=ts=>(!from||day(ts)>=from)&&(!to||day(ts)<=to),RF=mine(rets).filter(x=>inr(x.ts)),rfA=RF.reduce((x,e)=>x+e.amt,0),rfP=RF.reduce((x,e)=>x+e.amt-e.cost,0),exA=mine(expenses).filter(x=>inr(x.ts)).reduce((x,e)=>x+e.amt,0);
+  const inr=ts=>(!from||day(ts)>=from)&&(!to||day(ts)<=to),RF=bmine(rets).filter(x=>inr(x.ts)),rfA=RF.reduce((x,e)=>x+e.amt,0),rfP=RF.reduce((x,e)=>x+e.amt-e.cost,0),exA=bmine(expenses).filter(x=>inr(x.ts)).reduce((x,e)=>x+e.amt,0);
+  const mons=[...Array(12)].map((_,m)=>{const a=all.filter(x=>{const d=new Date(x.ts);return d.getFullYear()===yr&&d.getMonth()===m});return{m,n:a.length,rev:a.reduce((x,y)=>x+y.total,0),profit:a.reduce((x,y)=>x+y.profit,0)}}),yR=mons.reduce((x,m)=>x+m.rev,0),yP=mons.reduce((x,m)=>x+m.profit,0);
   const pc=v=>`<span class="${v<0?'neg':'pos'}">${money(v)}</span>`;
   return `<div class="card"><div class="stats"><div class="stat"><span class="mut">Today's sales</span><b>${money(t.rev)}</b></div><div class="stat"><span class="mut">Today's profit</span><b class="${t.profit<0?'neg':'pos'}">${money(t.profit)}</b></div><div class="stat"><span class="mut">Week revenue</span><b>${money(w.rev)}</b></div><div class="stat"><span class="mut">Week profit</span><b class="${w.profit<0?'neg':'pos'}">${money(w.profit)}</b></div></div></div>
   <div class="card"><div class="row"><h2 style="margin:0">Weekly sales graph</h2><div><button data-act="wk" data-id="1">‹</button> <button data-act="wk" data-id="-1" ${wk<1?'disabled':''}>›</button></div></div>
-  <small class="mut">${days[0].d} to ${days[6].d} · <span style="color:var(--pri)">■</span> sales <span style="color:var(--ok)">■</span> profit</small>${chart(days)}</div>
+  <small class="mut">${days[0].d} to ${days[6].d} · <span style="color:var(--pri)">■</span> sales <span style="color:var(--warn)">■</span> profit</small>${chart(days)}</div>
+  <div class="card"><div class="row"><h2 style="margin:0">Monthly sales graph</h2><div><button data-act="yr" data-id="-1">‹</button> <b>${yr}</b> <button data-act="yr" data-id="1" ${yr>=new Date().getFullYear()?'disabled':''}>›</button></div></div>
+  <small class="mut">Revenue ${money(yR)} · profit ${money(yP)} · <span style="color:var(--pri)">■</span> sales <span style="color:var(--warn)">■</span> profit</small>${chartM(mons)}
+  <div class="tblw" style="margin-top:8px"><table class="nt"><tr><th>Month</th><th class="r">Sales</th><th class="r">Revenue</th><th class="r">Profit</th></tr>${mons.map(m=>`<tr><td>${MN[m.m]} ${yr}</td><td class="r">${m.n}</td><td class="r">${money(m.rev)}</td><td class="r">${pc(m.profit)}</td></tr>`).join('')}<tfoot><tr><td>${yr} total</td><td class="r">${mons.reduce((x,m)=>x+m.n,0)}</td><td class="r">${money(yR)}</td><td class="r">${pc(yP)}</td></tr></tfoot></table></div></div>
   <div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Report period</h2><button data-act="exp" data-id="sales">Export CSV</button></div><div class="row"><div style="flex:1"><label>From</label><input type="date" data-change="from" value="${from}" style="margin:0"></div><div style="flex:1"><label>To</label><input type="date" data-change="to" value="${to}" style="margin:0"></div></div></div>
   <div class="grid half"><div class="card"><h2>Summary</h2><div class="tblw"><table class="nt"><tr><th>Item</th><th class="r">Value</th></tr>
    <tr><td>Sales</td><td class="r">${list.length}</td></tr><tr><td>Items sold</td><td class="r">${items}</td></tr><tr><td>Subtotal</td><td class="r">${money(sub)}</td></tr><tr><td>Discounts given</td><td class="r">-${money(disc)}</td></tr>
    <tr><td>Revenue</td><td class="r">${money(r.rev)}</td></tr><tr><td>Cost of goods</td><td class="r">${money(r.rev-r.profit)}</td></tr><tr><td>Refunds</td><td class="r">-${money(rfA)}</td></tr><tr><td>Profit after refunds</td><td class="r">${pc(r.profit-rfP)}</td></tr><tr><td>Expenses</td><td class="r">-${money(exA)}</td></tr><tfoot><tr><td>Net profit</td><td class="r">${pc(r.profit-rfP-exA)}</td></tr></tfoot></table></div></div>
   <div class="card"><h2>Payment methods</h2><div class="tblw">${Object.keys(pb).length?`<table class="nt"><tr><th>Method</th><th class="r">Amount</th></tr>${Object.entries(pb).map(([k,v])=>`<tr><td>${esc(k)}</td><td class="r">${money(v)}</td></tr>`).join('')}<tfoot><tr><td>Total</td><td class="r">${money(Object.values(pb).reduce((x,v)=>x+v,0))}</td></tr></tfoot></table>`:'<p class="mut">No sales in range.</p>'}</div></div></div>
   <div class="card"><h2>Daily profit</h2><div class="tblw">${dk.length?`<table><tr><th>Date</th><th class="r">Sales</th><th class="r">Revenue</th><th class="r">Cost</th><th class="r">Profit</th></tr>${dk.slice(dp.a,dp.b).map(d=>{const o=byDay[d];return `<tr><td>${d}</td><td class="r">${o.n}</td><td class="r">${money(o.rev)}</td><td class="r">${money(o.rev-o.profit)}</td><td class="r">${pc(o.profit)}</td></tr>`}).join('')}<tfoot><tr><td>All days</td><td class="r">${list.length}</td><td class="r">${money(r.rev)}</td><td class="r">${money(r.rev-r.profit)}</td><td class="r">${pc(r.profit)}</td></tr></tfoot></table>`:'<p class="mut">No sales in range.</p>'}</div>${dk.length?dp.html:''}</div>
-  <div class="card"><h2>Transactions</h2><div class="tblw">${list.length?`<table><tr><th>#</th><th>Date</th><th>Customer</th><th>Cashier</th><th>Payment</th><th class="r">Items</th><th class="r">Discount</th><th class="r">Total</th><th class="r">Profit</th><th></th></tr>${list.slice(tx.a,tx.b).map(s=>`<tr><td>${s.no}${rfOf(s.id)?'<br><small class="neg">Refunded '+money(rfOf(s.id))+'</small>':''}</td><td data-v="${s.ts}">${new Date(s.ts).toLocaleString()}</td><td>${s.cust?esc((s.cust.name||'')+(s.cust.phone?' · '+s.cust.phone:''))+(s.cust.note?'<br><small class="mut">'+esc(s.cust.note)+'</small>':''):'—'}</td><td>${esc(s.by)}</td><td>${esc(s.pay||'Cash')}${(s.pays||[]).some(p=>p.ref)?'<br><small class="mut">'+esc(s.pays.filter(p=>p.ref).map(p=>p.ref).join(', '))+'</small>':''}</td><td class="r">${s.items.reduce((x,i)=>x+i.qty,0)}</td><td class="r">${s.disc>0?'-'+money(s.disc):'—'}</td><td class="r">${money(s.total)}</td><td class="r">${pc(s.profit)}</td><td style="white-space:nowrap"><button data-act="rcpt" data-id="${s.id}">Receipt</button> <button data-act="open" data-id="refund" data-x="${s.id}">Refund</button> <button data-act="open" data-id="sdate" data-x="${s.id}">Date</button> <button class="del" data-act="delrcpt" data-id="${s.id}">Delete</button></td></tr>`).join('')}<tfoot><tr><td colspan="5">Total (${list.length} sales)</td><td class="r">${items}</td><td class="r">${disc>0?'-'+money(disc):'—'}</td><td class="r">${money(r.rev)}</td><td class="r">${pc(r.profit)}</td><td></td></tr></tfoot></table>`:'<p class="mut">No sales in range.</p>'}</div>${list.length?tx.html:''}</div>`;
+  <div class="card"><h2>Transactions</h2><div class="tblw">${list.length?`<table><tr><th>#</th><th>Date</th><th>Customer</th><th>Cashier</th><th>Branch</th><th>Payment</th><th class="r">Items</th><th class="r">Discount</th><th class="r">Total</th><th class="r">Profit</th><th></th></tr>${list.slice(tx.a,tx.b).map(s=>`<tr><td>${s.no}${rfOf(s.id)?'<br><small class="neg">Refunded '+money(rfOf(s.id))+'</small>':''}</td><td data-v="${s.ts}">${new Date(s.ts).toLocaleString()}</td><td>${s.cust?esc((s.cust.name||'')+(s.cust.phone?' · '+s.cust.phone:''))+(s.cust.note?'<br><small class="mut">'+esc(s.cust.note)+'</small>':''):'—'}</td><td>${esc(s.by)}</td><td>${esc(brName(s.br))}</td><td>${esc(s.pay||'Cash')}${(s.pays||[]).some(p=>p.ref)?'<br><small class="mut">'+esc(s.pays.filter(p=>p.ref).map(p=>p.ref).join(', '))+'</small>':''}</td><td class="r">${s.items.reduce((x,i)=>x+i.qty,0)}</td><td class="r">${s.disc>0?'-'+money(s.disc):'—'}</td><td class="r">${money(s.total)}</td><td class="r">${pc(s.profit)}</td><td style="white-space:nowrap"><button data-act="rcpt" data-id="${s.id}">Receipt</button> <button data-act="open" data-id="refund" data-x="${s.id}">Refund</button> <button data-act="open" data-id="sdate" data-x="${s.id}">Date</button> <button class="del" data-act="delrcpt" data-id="${s.id}">Delete</button></td></tr>`).join('')}<tfoot><tr><td colspan="6">Total (${list.length} sales)</td><td class="r">${items}</td><td class="r">${disc>0?'-'+money(disc):'—'}</td><td class="r">${money(r.rev)}</td><td class="r">${pc(r.profit)}</td><td></td></tr></tfoot></table>`:'<p class="mut">No sales in range.</p>'}</div>${list.length?tx.html:''}</div>`;
 }
 function userView(){
   const L=mine(users),a=pager('user',L.length);
-  return `<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Users (${L.length})</h2><button class="pri" data-act="open" data-id="user">+ Register user</button></div><div class="tblw"><table><tr><th>Name</th><th>Username</th><th>Role</th><th></th></tr>${L.slice(a.a,a.b).map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.user)}</td><td><select data-change="role" data-id="${u.id}" ${u.id===U.id?'disabled':''} style="width:100px">${Object.keys(PERM).map(r=>`<option ${u.role===r?'selected':''}>${r}</option>`).join('')}</select></td><td>${u.id===U.id?'<span class="mut">you</span>':`<button data-act="open" data-id="pw" data-x="${u.id}">Reset password</button> <button class="del" data-act="deluser" data-id="${u.id}">Delete</button>`}</td></tr>`).join('')}</table></div>${a.html}</div>`;
+  return `<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Users (${L.length})</h2><button class="pri" data-act="open" data-id="user">+ Register user</button></div><div class="tblw"><table><tr><th>Name</th><th>Username</th><th>Role</th><th>Branches</th><th></th></tr>${L.slice(a.a,a.b).map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.user)}</td><td><select data-change="role" data-id="${u.id}" ${u.id===U.id?'disabled':''} style="width:100px">${Object.keys(PERM).map(r=>`<option ${u.role===r?'selected':''}>${r}</option>`).join('')}</select></td><td>${u.role==='admin'?'All branches':esc((u.br||[]).map(brName).join(', ')||'-')}</td><td>${u.id===U.id?'<span class="mut">you</span>':`${u.role==='admin'?'':`<button data-act="open" data-id="ubr" data-x="${u.id}">Branches</button> `}<button data-act="open" data-id="pw" data-x="${u.id}">Reset password</button> <button class="del" data-act="deluser" data-id="${u.id}">Delete</button>`}</td></tr>`).join('')}</table></div>${a.html}</div>`;
 }
 function mdView(){
-  const G=mine(cats),P=mine(prods);let t,b;
+  const G=bmine(cats),P=bmine(prods);let t,b;
   if(md==='refund'){const sl=sales.find(x=>x.id===mdx);if(!sl)return '';const done=retQty(sl);
     return `<div class="modal"><div class="card" style="width:100%;max-width:520px"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Refund · Receipt #${sl.no}</h2><button data-act="closem">✕</button></div><form data-form="refund"><div class="tblw"><table class="nt"><tr><th>Item</th><th class="r">Price</th><th class="r">Sold</th><th class="r">Returned</th><th>Return qty</th></tr>${sl.items.map((i,n)=>{const r=done[i.id]||0,mx=i.qty-r;return `<tr><td>${esc(i.name)}</td><td class="r">${money(i.price)}</td><td class="r">${i.qty}</td><td class="r">${r}</td><td><input type="number" name="q${n}" min="0" max="${mx}" value="0" ${mx?'':'disabled'}></td></tr>`}).join('')}</table></div>
     <label style="margin-top:10px;display:block">Refund method</label><select name="meth">${PAY.map(m=>`<option>${m[0]}</option>`).join('')}</select><label>Reason</label><input name="why" placeholder="Optional"><label style="display:flex;gap:8px;align-items:center;color:var(--tx)"><input type="checkbox" name="restock" checked style="width:auto;margin:0"> Return items to stock</label><div class="err">${esc(err)}</div><div class="row"><button type="button" data-act="closem">Cancel</button><button class="pri">Refund</button></div></form></div></div>`}
@@ -369,6 +403,10 @@ function mdView(){
     <input id="mq" data-input="mq" type="search" placeholder="Search products in this category…" value="${esc(mq)}">
     ${L.length?`<div class="tblw"><table><tr><th>Product</th><th class="r">Price</th><th></th></tr>${L.map(p=>`<tr class="cr" style="--h:${hueOf(c.id)}"><td>${esc(tc(p.name))}</td><td class="r">${money(p.price)}</td><td class="r"><button class="pri" data-act="add" data-id="${p.id}">Add</button></td></tr>`).join('')}</table></div>`:'<p class="mut">No products in stock match.</p>'}
     <div class="row" style="margin-top:12px"><span class="mut">Cart: ${cn} item${cn===1?'':'s'} · ${money(cartTotal())}</span><button class="pri" data-act="closem">Done</button></div></div></div>`}
+  if(md==='br'){const bb=branches.find(x=>x.id===mdx);t=bb?'Edit branch':'New branch';b=`<label>Branch name</label><input name="name" value="${esc(bb?bb.name:'')}" required autofocus><label>Location (optional)</label><input name="loc" value="${esc(bb?bb.loc||'':'')}">`}
+  if(md==='ubr'){const u=users.find(x=>x.id===mdx)||{br:[]};t='Branch access · '+(u.name||'');b=`<p class="mut" style="margin-top:0">This person can only see and work in the branches ticked here.</p>${BRCK(u.br||[])}`}
+  if(md==='copycat'){const o=branches.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');t='Copy products';b=`<p class="mut" style="margin-top:0">Copies categories and products (prices and barcodes, with stock at 0) that the other branch does not have yet.</p><label>From</label><select name="from">${o}</select><label>To</label><select name="to">${branches.map((x,i)=>`<option value="${x.id}" ${i===1?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`}
+  if(md==='xfer'){const o=bmine(prods).filter(p=>p.stock>0);t='Transfer stock from '+brName(curBr);b=`<label>Product</label><select name="id">${o.map(p=>`<option value="${p.id}">${esc(dn(p))} (${p.stock})</option>`).join('')}</select><label>Send to</label><select name="to">${branches.filter(x=>x.id!==curBr).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select><label>Quantity</label><input name="qty" type="number" min="1" required>`}
   if(md==='exp'){t='Add expense';b=`<label>Date</label><input name="date" type="date" value="${day(Date.now())}" required><label>Category</label><select name="cat">${EXC.map(c=>`<option>${c}</option>`).join('')}</select><label>Amount</label><input name="amt" type="number" min="0" step="0.01" required autofocus><label>Note (optional)</label><input name="note">`}
   if(md==='adj'){const sp=P.find(p=>p.id===mdx)||P[0];t='Adjust stock';b=`<label>Product</label><select name="id">${P.map(p=>`<option value="${p.id}" ${sp&&p.id===sp.id?'selected':''}>${esc(dn(p))} (${p.stock})</option>`).join('')}</select><label>Actual count now</label><input name="cnt" type="number" min="0" required autofocus><label>Reason</label><select name="why">${['Count correction','Damaged','Expired','Lost or stolen','Other'].map(x=>`<option>${x}</option>`).join('')}</select>`}
   if(md==='mypw'){t='Change my password';b=`<label>Current password</label>${PWF('cur')}<label>New password</label>${PWF('pass')}<label>Confirm new password</label>${PWF('pass2')}`}
@@ -381,13 +419,13 @@ function mdView(){
   if(md==='cat'){t='New category';b='<label>Category name</label><input name="name" placeholder="e.g. Beverages" required autofocus>'}
   if(md==='prod'){t='Add product';b=`<label>Category</label><select name="cat">${G.map(c=>`<option value="${c.id}" ${c.id===mdx?'selected':''}>${esc(tc(c.name))}</option>`).join('')}</select><label>Product name</label><input name="name" required autofocus><label>Barcode (optional)</label><div class="pw"><input id="pcode" name="code" autocomplete="off"><button type="button" data-act="scanfield" data-id="pcode" aria-label="Scan barcode">${CAM}</button></div><div class="row"><div><label>Buying price</label><input name="buy" type="number" min="0" step="0.01" required></div><div><label>Selling price</label><input name="price" type="number" min="0" step="0.01" required></div></div><label>Opening stock</label><input name="stock" type="number" min="0" value="0" required>`}
   if(md==='stock'){const sp=P.find(p=>p.id===mdx)||P[0];t='Add stock';b=`${sp?`<div class="dcard" style="margin-bottom:10px">${catTag(sp.cat)} <b>${esc(tc(sp.name))}</b><br><small class="mut">Current stock: ${sp.stock}</small></div>`:''}<label>Product</label><select name="id" data-change="sp">${P.map(p=>`<option value="${p.id}" ${sp&&p.id===sp.id?'selected':''}>${esc(dn(p))} (${p.stock})</option>`).join('')}</select><label>Quantity to add</label><input name="qty" type="number" min="1" required autofocus>`}
-  if(md==='user'){t='Register user';b=`<label>Full name</label><input name="name" required autofocus><label>Username</label><input name="user" required><label>Password</label><div class="pw"><input name="pass" type="${showpw?'text':'password'}" data-pw minlength="4" required><button type="button" data-act="showpw" aria-label="Show or hide password">${showpw?EYEOFF:EYE}</button></div><label>Role</label><select name="role"><option value="cashier">Cashier – sell, add stock</option><option value="manager">Manager – + products, categories, reports</option><option value="admin">Admin – everything incl. users</option></select>`}
+  if(md==='user'){t='Register user';b=`<label>Full name</label><input name="name" required autofocus><label>Username</label><input name="user" required><label>Password</label><div class="pw"><input name="pass" type="${showpw?'text':'password'}" data-pw minlength="4" required><button type="button" data-act="showpw" aria-label="Show or hide password">${showpw?EYEOFF:EYE}</button></div><label>Role</label><select name="role"><option value="cashier">Cashier – sell, add stock</option><option value="manager">Manager – + products, categories, reports</option><option value="admin">Admin – everything incl. users</option></select><label>Branch access (not needed for admins)</label>${BRCK(curBr==='all'?[]:[curBr])}`}
   if(md==='sdate'){const sl=sales.find(x=>x.id===mdx)||{ts:Date.now(),no:''};t='Change date · Receipt #'+sl.no;b=`<label>Date &amp; time</label><input type="datetime-local" name="dt" value="${dtv(sl.ts)}" required autofocus>`}
   return `<div class="modal"><div class="card" style="width:100%;max-width:420px"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">${t}</h2><button data-act="closem">✕</button></div><form data-form="${md}">${b}<div class="err">${esc(err)}</div><div class="row"><button type="button" data-act="closem">Cancel</button><button class="pri">Save</button></div></form></div></div>`;
 }
 function receiptModal(){
   const s=sales.find(x=>x.id===rc);if(!s)return'';
-  return `<div class="modal"><div><div class="card receipt"><div class="ctr"><b style="font-size:15px">${esc(C.name)}</b><br>${esc(C.loc)}<br>Tel: ${esc(C.phone)}</div><hr>
+  return `<div class="modal"><div><div class="card receipt"><div class="ctr"><b style="font-size:15px">${esc(C.name)}</b><br>${esc(C.loc)}${branches.length>1?' · '+esc(brName(s.br)):''}<br>Tel: ${esc(C.phone)}</div><hr>
   Receipt #${String(s.no).padStart(5,'0')}<br>${new Date(s.ts).toLocaleString()}<br>Cashier: ${esc(s.by)}<br>Payment: ${esc(s.pay||'Cash')}${s.cust?`${s.cust.name?'<br>Customer: '+esc(s.cust.name):''}${s.cust.phone?'<br>Tel: '+esc(s.cust.phone):''}${s.cust.note?'<br>Note: '+esc(s.cust.note):''}`:''}<hr>
   <table>${s.items.map(i=>`<tr><td style="border:0;white-space:normal">${i.qty} × ${esc(i.name)}<br><span class="mut">@ ${money(i.price)}</span></td><td class="r" style="border:0">${money(i.qty*i.price)}</td></tr>`).join('')}</table><hr>
   ${s.disc>0?`<div class="row"><span>Subtotal</span><span>${money(s.sub)}</span></div><div class="row"><span>Discount</span><span>-${money(s.disc)}</span></div>`:''}<div class="row"><b>TOTAL</b><b>${money(s.total)}</b></div>${s.pays?s.pays.map(p=>`<div class="row"><span>${esc(p.m)}${p.ref?' #'+esc(p.ref):''}</span><span>${money(p.amt)}</span></div>`).join('')+(s.change>0?`<div class="row"><span>Change</span><span>${money(s.change)}</span></div>`:''):''}<hr><div class="ctr"><i>${esc(C.motto)}</i><br>Thank you!</div></div>
@@ -401,9 +439,22 @@ document.addEventListener('submit',async e=>{
   if(k==='reset'){try{if(d.pass!==d.pass2)throw Error('Passwords do not match.');await api('POST','/api/reset',{code:d.code,user:d.user,recovery:d.recovery,pass:d.pass});mode='login';toast('Password changed. You can log in now.')}catch(x){err=x.message}return render()}
   if(k==='login'||k==='reg'){try{if(k==='reg'&&d.pass!==d.pass2)throw Error('Passwords do not match.');const r=await api('POST',k==='reg'?'/api/register':'/api/login',d);token=r.token;try{localStorage.setItem('pos3_token',token)}catch(x){}await boot();tab='sell';mode='login';if(r.recovery){recovery=r.recovery;md='rec'}toast(k==='reg'?'Company registered':'Logged in successfully')}catch(x){err=x.message}return render()}
   if(!U)return;
+  if(k==='br'&&can('branches')){const n=(d.name||'').trim();if(!n)return toast('Enter a branch name','warn');const b=branches.find(x=>x.id===mdx);
+    return ask((b?'Save changes to ':'Create branch ')+'"'+n+'"?',async()=>{if(b){await api('PATCH','/api/branches/'+b.id,{name:n,loc:d.loc});b.name=n;b.loc=(d.loc||'').trim();audit('Branch edited',n)}else{const nb=await api('POST','/api/branches',{name:n,loc:d.loc});branches.push(nb);audit('Branch created',n)}md=null;toast('Branch saved')})}
+  if(k==='ubr'&&can('users')){const u=users.find(x=>x.id===mdx),brs=branches.filter(b=>d['br_'+b.id]).map(b=>b.id);if(!u)return;if(!brs.length)return toast('Choose at least one branch','warn');
+    return ask('Save branch access for '+u.name+'?',async()=>{await api('PATCH','/api/users/'+u.id,{br:brs});u.br=brs;audit('Branch access changed',u.user+': '+brs.map(brName).join(', '));md=null;toast('Branch access saved')})}
+  if(k==='copycat'&&can('branches')){const A=d.from,B=d.to;if(A===B)return toast('Choose two different branches','warn');
+    return ask('Copy products from '+brName(A)+' to '+brName(B)+'? Stock starts at 0.',()=>{let nc=0,np=0;const cm={};
+      cats.filter(c=>c.br===A).forEach(c=>{let t=cats.find(x=>x.br===B&&x.name.toLowerCase()===c.name.toLowerCase());if(!t){t={id:uid(),co:C.code,br:B,name:c.name,hue:c.hue};cats.push(t);nc++}cm[c.id]=t.id});
+      prods.filter(p=>p.br===A).forEach(p=>{const cid=cm[p.cat];if(!cid)return;if(prods.some(x=>x.br===B&&x.cat===cid&&(x.code&&p.code?x.code===p.code:x.name.toLowerCase()===p.name.toLowerCase())))return;prods.push({id:uid(),co:C.code,br:B,cat:cid,name:p.name,code:p.code||'',buy:p.buy,price:p.price,stock:0});np++});
+      save(K.g,cats);save(K.p,prods);audit('Products copied',brName(A)+' to '+brName(B)+' ('+np+' products)');md=null;toast('Copied '+np+' products, '+nc+' new categories')})}
+  if(k==='xfer'&&can('branches')){const p=prods.find(x=>x.id===d.id),q=parseInt(d.qty)||0,B=d.to;if(!p||!B)return toast('Choose a product and a branch','warn');if(q<1||q>p.stock)return toast('Enter a quantity up to '+p.stock,'warn');
+    return ask('Move '+q+' × '+dn(p)+' from '+brName(p.br)+' to '+brName(B)+'?',()=>{const cat=cats.find(c=>c.id===p.cat);let dc=cats.find(c=>c.br===B&&c.name.toLowerCase()===cat.name.toLowerCase());if(!dc){dc={id:uid(),co:C.code,br:B,name:cat.name,hue:cat.hue};cats.push(dc);save(K.g,cats)}
+      let dp=prods.find(x=>x.br===B&&x.cat===dc.id&&(x.code&&p.code?x.code===p.code:x.name.toLowerCase()===p.name.toLowerCase()));if(!dp){dp={id:uid(),co:C.code,br:B,cat:dc.id,name:p.name,code:p.code||'',buy:p.buy,price:p.price,stock:0};prods.push(dp)}
+      p.stock-=q;dp.stock+=q;save(K.p,prods);rec('moves',[mv(p,-q,'transfer','to '+brName(B)),mv(dp,q,'transfer','from '+brName(p.br))]);audit('Stock transferred',q+' × '+dn(p)+': '+brName(p.br)+' to '+brName(B));md=null;toast('Stock transferred')})}
   if(k==='exp'&&can('expenses')){const amt=+d.amt;if(!(amt>0))return toast('Enter an amount','warn');
-    return ask('Save expense of '+money(amt)+' ('+d.cat+')?',()=>{expenses.push({id:uid(),co:C.code,ts:new Date(d.date+'T12:00').getTime(),cat:d.cat,amt,note:(d.note||'').trim(),by:U.name});save(K.e,expenses);audit('Expense added',d.cat+' · '+money(amt));md=null;toast('Expense saved')})}
-  if(k==='adj'&&can('history')){const p=mine(prods).find(x=>x.id===d.id),n=parseInt(d.cnt);if(!p||isNaN(n)||n<0)return toast('Enter the counted quantity','warn');
+    return ask('Save expense of '+money(amt)+' ('+d.cat+')?',()=>{expenses.push({id:uid(),co:C.code,br:BR(),ts:new Date(d.date+'T12:00').getTime(),cat:d.cat,amt,note:(d.note||'').trim(),by:U.name});save(K.e,expenses);audit('Expense added',d.cat+' · '+money(amt));md=null;toast('Expense saved')})}
+  if(k==='adj'&&can('history')){const p=bmine(prods).find(x=>x.id===d.id),n=parseInt(d.cnt);if(!p||isNaN(n)||n<0)return toast('Enter the counted quantity','warn');
     return ask('Set '+dn(p)+' from '+p.stock+' to '+n+' ('+d.why+')?',()=>{const diff=n-p.stock;p.stock=n;save(K.p,prods);rec('moves',[mv(p,diff,'adjust','',d.why)]);audit('Stock adjusted',dn(p)+' '+(diff>=0?'+':'')+diff+' · '+d.why);md=null;toast('Stock updated')})}
   if(k==='mypw'){if(d.pass!==d.pass2)return toast('Passwords do not match','warn');return ask('Change your password?',async()=>{await api('POST','/api/password',{cur:d.cur,pass:d.pass});md=null;toast('Password changed')})}
   if(k==='pw'&&can('users')){if(d.pass!==d.pass2)return toast('Passwords do not match','warn');const u=users.find(x=>x.id===mdx);return ask('Reset the password for '+(u?u.name:'this user')+'?',async()=>{await api('PATCH','/api/users/'+mdx+'/password',{pass:d.pass});audit('Password reset',u?u.user:mdx);md=null;toast('Password reset')})}
@@ -412,7 +463,7 @@ document.addEventListener('submit',async e=>{
     if(!its.length)return toast('Enter a quantity to return','warn');
     const ratio=sl.sub?sl.total/sl.sub:1,sum=its.reduce((x,i)=>x+i.price*i.qty,0),amt=Math.round(sum*ratio*100)/100,cost=its.reduce((x,i)=>x+i.buy*i.qty,0),rs=!!d.restock;
     return ask('Refund '+money(amt)+' by '+d.meth+' for receipt #'+sl.no+'?',()=>{
-      rec('rets',[{id:uid(),co:C.code,ts:Date.now(),sid:sl.id,no:sl.no,items:its,amt,cost,method:d.meth,reason:(d.why||'').trim(),restock:rs,by:U.name}]);
+      rec('rets',[{id:uid(),co:C.code,br:sl.br||BR(),ts:Date.now(),sid:sl.id,no:sl.no,items:its,amt,cost,method:d.meth,reason:(d.why||'').trim(),restock:rs,by:U.name}]);
       if(rs){const ms=[];its.forEach(i=>{const p=prods.find(x=>x.id===i.id);if(p){p.stock+=i.qty;ms.push(mv(p,i.qty,'return','#'+sl.no+' refund'))}});save(K.p,prods);if(ms.length)rec('moves',ms)}
       audit('Refund','Receipt #'+sl.no+' · '+money(amt)+' · '+d.meth);md=null;toast('Refund recorded: '+money(amt))})}
   if(k==='pin'){const c=lockCfg();if(c&&await hash('pin:'+d.cur)!==c.h)return toast('Current PIN is wrong','warn');if(!/^\d{4,6}$/.test(d.pin))return toast('PIN must be 4 to 6 digits','warn');if(d.pin!==d.pin2)return toast('The PINs do not match','warn');
@@ -420,18 +471,20 @@ document.addEventListener('submit',async e=>{
   if(k==='sdate'&&can('report')){const sl=sales.find(x=>x.id===mdx),ts=new Date(d.dt).getTime();if(!sl||!ts)return toast('Pick a valid date','warn');
     return ask('Change the date of receipt #'+sl.no+'?',async()=>{const old=sl.ts;sl.ts=ts;try{await persistSale('date',sl)}catch(e){sl.ts=old;throw e}audit('Receipt date changed','#'+sl.no);md=null;toast('Receipt date updated')})}
   if(k==='user'&&can('users')){const u=d.user.trim().toLowerCase();if(mine(users).some(x=>x.user===u)){err='Username already exists.';return render()}
-    return ask('Register '+d.name.trim()+' as '+d.role+'?',async()=>{users.push(await api('POST','/api/users',{user:u,name:d.name.trim(),role:d.role,pass:d.pass}));audit('User created',u+' ('+d.role+')');md=null;toast('User created')})}
-  if(k==='cat'&&can('products')){const n=tc(d.name.trim());if(mine(cats).some(c=>c.name.toLowerCase()===n.toLowerCase()))return toast('Category exists');
-    return ask('Save category "'+n+'"?',()=>{cats.push({id:uid(),co:C.code,name:n,hue:newHue()});save(K.g,cats);md=null;toast('Category saved')})}
-  if(k==='prod'&&can('products')){const c0=(d.code||'').trim();if(c0&&mine(prods).some(x=>x.code===c0))return toast('That barcode is already used by another product','warn')}
-  if(k==='prod'&&can('products'))return ask('Save product "'+d.name.trim()+'"?',()=>{const np={id:uid(),co:C.code,cat:d.cat,name:tc(d.name.trim()),code:(d.code||'').trim(),buy:+d.buy,price:+d.price,stock:parseInt(d.stock)||0};prods.push(np);save(K.p,prods);if(np.stock>0)rec('moves',[mv(np,np.stock,'initial')]);audit('Product added',dn(np));md=null;toast('Product saved')});
-  if(k==='stock'&&can('stock')){const p=mine(prods).find(x=>x.id===d.id);if(p)return ask('Add '+(parseInt(d.qty)||0)+' units to '+dn(p)+'?',()=>{p.stock+=parseInt(d.qty)||0;save(K.p,prods);rec('moves',[mv(p,parseInt(d.qty)||0,'add')]);md=null;toast('Stock added: '+dn(p))})}
+    const brs=branches.filter(b=>d['br_'+b.id]).map(b=>b.id);if(d.role!=='admin'&&!brs.length)return toast('Choose at least one branch','warn');
+    return ask('Register '+d.name.trim()+' as '+d.role+'?',async()=>{users.push(await api('POST','/api/users',{user:u,name:d.name.trim(),role:d.role,pass:d.pass,br:brs}));audit('User created',u+' ('+d.role+')');md=null;toast('User created')})}
+  if(k==='cat'&&can('products')){const n=tc(d.name.trim());if(bmine(cats).some(c=>c.name.toLowerCase()===n.toLowerCase()))return toast('Category exists');
+    return ask('Save category "'+n+'"?',()=>{cats.push({id:uid(),co:C.code,br:BR(),name:n,hue:newHue()});save(K.g,cats);md=null;toast('Category saved')})}
+  if(k==='prod'&&can('products')){const c0=(d.code||'').trim();if(c0&&bmine(prods).some(x=>x.code===c0))return toast('That barcode is already used by another product','warn')}
+  if(k==='prod'&&can('products'))return ask('Save product "'+d.name.trim()+'"?',()=>{const np={id:uid(),co:C.code,br:BR(),cat:d.cat,name:tc(d.name.trim()),code:(d.code||'').trim(),buy:+d.buy,price:+d.price,stock:parseInt(d.stock)||0};prods.push(np);save(K.p,prods);if(np.stock>0)rec('moves',[mv(np,np.stock,'initial')]);audit('Product added',dn(np));md=null;toast('Product saved')});
+  if(k==='stock'&&can('stock')){const p=bmine(prods).find(x=>x.id===d.id);if(p)return ask('Add '+(parseInt(d.qty)||0)+' units to '+dn(p)+'?',()=>{p.stock+=parseInt(d.qty)||0;save(K.p,prods);rec('moves',[mv(p,parseInt(d.qty)||0,'add')]);md=null;toast('Stock added: '+dn(p))})}
   render();
 });
 document.addEventListener('change',e=>{
   const t=e.target,c=t.dataset.change,id=t.dataset.id;if(!c)return;
   if(c==='paid'){paid=t.value;return}
   if(c==='lown'){lowN=+t.value;save('pos3_lown',lowN)}
+  if(c==='ex'&&U){const L=getEx();save('pos3_ex_'+C.code,t.checked?L.filter(x=>x!==id):[...L,id])}
   if(c==='sp'){mdx=t.value}
   if(c==='pm'){const p=pays[+t.dataset.i];if(p)p.m=t.value}
   if(c==='cu'){cust[t.dataset.f]=t.value;return}
@@ -439,7 +492,7 @@ document.addEventListener('change',e=>{
   if(c==='filt'){filt=t.value;pg.sell=1}if(c==='ps'){ps=+t.value;pg={}}if(c==='from'){from=t.value;pg.tx=pg.dp=1}if(c==='to'){to=t.value;pg.tx=pg.dp=1}
   if(c==='cp'){const l=cart.find(x=>x.id===id),v=Math.max(0,+t.value||0);if(l)return ask('Change the selling price to '+money(v)+' for this sale?',()=>{l.price=v;toast('Price changed for this sale')},true)}
   if(c==='pe'&&U&&can('products')&&t.dataset.f==='code'){const p=prods.find(x=>x.id===id),v=t.value.trim();
-    if(p){if(v&&mine(prods).some(x=>x.id!==id&&x.code===v)){toast('Barcode already used by another product','warn');return render()}
+    if(p){if(v&&bmine(prods).some(x=>x.id!==id&&x.code===v)){toast('Barcode already used by another product','warn');return render()}
       return ask('Set the barcode of '+dn(p)+' to '+(v||'none')+'?',()=>{p.code=v;save(K.p,prods);toast('Barcode saved')},true)}}
   if(c==='pe'&&U&&can('products')){const p=prods.find(x=>x.id===id),v=Math.max(0,+t.value||0),f=t.dataset.f;if(p)return ask('Change the '+(f==='buy'?'buying':'selling')+' price of '+p.name+' to '+money(v)+'?',()=>{p[f]=v;save(K.p,prods);audit('Price changed',dn(p)+' '+(f==='buy'?'buying':'selling')+' price to '+money(v));toast('Price updated')},true)}
   if(c==='role'&&U&&can('users')){const u=users.find(x=>x.id===id),v=t.value;if(u&&u.co===C.code)return ask('Change '+u.name+' to '+v+'?',async()=>{await api('PATCH','/api/users/'+u.id,{role:v});audit('Role changed',u.user+' to '+v);u.role=v;toast('Role updated')},true)}
@@ -459,12 +512,16 @@ document.addEventListener('click',e=>{
   if(a==='delheld')return ask('Delete this held sale?',()=>{save(heldKey(),getHeld().filter(i=>i.id!==id));toast('Held sale deleted')});
   if(a==='delexp')return ask('Delete this expense?',()=>{const e=expenses.find(x=>x.id===id);if(e)audit('Expense deleted',e.cat+' · '+money(e.amt));expenses=expenses.filter(x=>x.id!==id);save(K.e,expenses);toast('Expense deleted')});
   if(a==='exp')return exportCSV(id.replace('-all',''),id.endsWith('-all'));
-  if(a==='sharelow'){const L=mine(prods).filter(p=>p.stock<=lowN).sort((x,y)=>x.stock-y.stock);if(!L.length)return toast('Nothing is running low');const txt=C.name+' - low stock ('+day(Date.now())+')\n'+L.map(p=>'- '+dn(p)+': '+(p.stock<1?'OUT':p.stock)).join('\n');if(navigator.share)navigator.share({text:txt}).catch(()=>{});else if(navigator.clipboard)navigator.clipboard.writeText(txt).then(()=>toast('List copied'));else toast('Sharing is not supported here','warn');return}
-  if(a==='backupjson'){dlFile('pos-backup-'+C.code+'-'+day(Date.now())+'.json',JSON.stringify({v:1,company:C.code,at:new Date().toISOString(),cats:mine(cats),prods:mine(prods),sales:mine(sales),expenses:mine(expenses),moves:mine(moves),logs:mine(logs),rets:mine(rets)}),'application/json');toast('Backup downloaded');return}
+  if(a==='sharelow'){const L=bmine(prods).filter(p=>p.stock<=lowN).sort((x,y)=>x.stock-y.stock);if(!L.length)return toast('Nothing is running low');const txt=C.name+' - low stock ('+day(Date.now())+')\n'+L.map(p=>'- '+dn(p)+': '+(p.stock<1?'OUT':p.stock)).join('\n');if(navigator.share)navigator.share({text:txt}).catch(()=>{});else if(navigator.clipboard)navigator.clipboard.writeText(txt).then(()=>toast('List copied'));else toast('Sharing is not supported here','warn');return}
+  if(a==='backupjson'){dlFile('pos-backup-'+C.code+'-'+day(Date.now())+'.json',JSON.stringify({v:1,company:C.code,at:new Date().toISOString(),branches:branches,cats:cmine(cats),prods:cmine(prods),sales:cmine(sales),expenses:cmine(expenses),moves:cmine(moves),logs:cmine(logs),rets:cmine(rets)}),'application/json');toast('Backup downloaded');return}
   if(a==='restore'){const f=$('#rf')&&$('#rf').files[0];if(!f)return toast('Choose a backup file first','warn');
     f.text().then(txt=>{let d;try{d=JSON.parse(txt)}catch(x){return toast('That file is not a valid backup','err')}if(d.v!==1||!Array.isArray(d.prods))return toast('That file is not a POS backup','err');
       ask('Restore backup from '+(d.at?d.at.slice(0,10):'file')+'? This REPLACES all current data for this company.',async()=>{await api('POST','/api/restore',d);await boot();audit('Backup restored','from '+(d.at||'file'));toast('Backup restored')})});return}
   if(a==='recov')return ask('Generate a new recovery code? The old one will stop working.',async()=>{const r=await api('POST','/api/recovery');recovery=r.code;md='rec';dr=false});
+  if(a==='yr')yr=Math.min(new Date().getFullYear(),yr+ +id);
+  if(a==='setbr'){const go=()=>{curBr=id;save('pos3_br_'+U.id,id);if(id==='all'&&BONLY.includes(tab))tab='report';dr=false;cart=[];toast('Branch: '+(id==='all'?'All branches':brName(id)))};
+    if(id===curBr){dr=false}else if(cart.length)return ask('Switching branch clears the current cart. Continue?',go);else go()}
+  if(a==='delbr')return ask('Delete branch "'+brName(id)+'"? It must have no products or sales.',async()=>{await api('DELETE','/api/branches/'+id);const nm=brName(id);branches=branches.filter(b=>b.id!==id);users.forEach(u=>{u.br=(u.br||[]).filter(x=>x!==id)});if(curBr===id)pickBr();audit('Branch deleted',nm);toast('Branch deleted')});
   if(a==='recdone'){md=null;recovery=''}
   if(a==='showpw'){showpw=!showpw;document.querySelectorAll('input[data-pw]').forEach(i=>i.type=showpw?'text':'password');document.querySelectorAll('[data-act=showpw]').forEach(x=>x.innerHTML=showpw?EYEOFF:EYE);return}
   if(a==='print')return window.print();
@@ -476,7 +533,7 @@ document.addEventListener('click',e=>{
   if(a==='rmpin'){if(!lockCfg())return;return ask('Remove the PIN lock?',()=>{try{localStorage.removeItem(lockKey())}catch(e){}dr=false;toast('PIN removed')})}
   if(a==='dtoggle'){disc.on=!disc.on;if(!disc.on)disc.val=''}
   if(a==='rmpay')pays.splice(+id,1);
-  if(a==='qadd'){const nm=($('#qn').value||'').trim().toLowerCase(),qty=Math.max(1,parseInt($('#qq').value)||1),av=mine(prods).filter(x=>x.stock>0);
+  if(a==='qadd'){const nm=($('#qn').value||'').trim().toLowerCase(),qty=Math.max(1,parseInt($('#qq').value)||1),av=bmine(prods).filter(x=>x.stock>0);
     let p=av.find(x=>x.code&&x.code.toLowerCase()===nm)||av.find(x=>dn(x).toLowerCase()===nm);if(!p&&nm){const m=av.filter(x=>dn(x).toLowerCase().includes(nm));if(m.length===1)p=m[0]}
     if(p)addCart(p,qty);else toast(!nm?'Type a product name first':av.some(x=>dn(x).toLowerCase().includes(nm))?'Several products match - choose one from the list':'No in-stock product matches that name','warn')}
   if(a==='tab'&&can(id)){tab=id;err='';md=null;dr=false}
@@ -485,7 +542,8 @@ document.addEventListener('click',e=>{
   if(a==='delrcpt'&&can('report')){const sl=sales.find(x=>x.id===id);if(!sl)return;
     return ask('Delete receipt #'+sl.no+' ('+money(sl.total)+')? Its items will be returned to stock.',async()=>{
       const keep=sales;sales=sales.filter(x=>x.id!==id);try{await persistSale('del',sl)}catch(e){sales=keep;throw e}
-      const ms=[];sl.items.forEach(i=>{const p=prods.find(x=>x.id===i.id);if(p){p.stock+=i.qty;ms.push(mv(p,i.qty,'void','#'+sl.no+' deleted'))}});save(K.p,prods);if(ms.length)rec('moves',ms);audit('Receipt deleted','#'+sl.no+' · '+money(sl.total));if(rc===id)rc=null;toast('Receipt deleted')})}if(a==='open'){md=id;mdx=b.dataset.x||null;err='';dr=false;mq=''}if(a==='drawer')dr=true;if(a==='closed')dr=false;if(a==='theme'){theme=id;save('pos2_theme',theme);applyTheme()}if(a==='closem')md=null;if(a==='pg'){const[k,n]=id.split(':');pg[k]=(pg[k]||1)+ +n}
+      const ms=[];sl.items.forEach(i=>{const p=prods.find(x=>x.id===i.id);if(p){p.stock+=i.qty;ms.push(mv(p,i.qty,'void','#'+sl.no+' deleted'))}});save(K.p,prods);if(ms.length)rec('moves',ms);audit('Receipt deleted','#'+sl.no+' · '+money(sl.total));if(rc===id)rc=null;toast('Receipt deleted')})}if(a==='open'&&curBr==='all'&&['cat','prod','stock','adj','exp','held','sprods','cprods','xfer'].includes(id))return toast('Choose a branch first (Settings > Branch)','warn');
+  if(a==='open'){md=id;mdx=b.dataset.x||null;err='';dr=false;mq=''}if(a==='drawer')dr=true;if(a==='closed')dr=false;if(a==='theme'){theme=id;save('pos2_theme',theme);applyTheme()}if(a==='closem')md=null;if(a==='pg'){const[k,n]=id.split(':');pg[k]=(pg[k]||1)+ +n}
   if(a==='rcpt')rc=id;
   if(a==='add'){const p=prods.find(x=>x.id===id);if(p)addCart(p)}
   if(a==='dec'){const l=cart.find(x=>x.id===id);if(l&&--l.qty<1)cart=cart.filter(x=>x!==l)}
@@ -507,7 +565,7 @@ document.addEventListener('click',e=>{
       if(!items.length)return;
       const dd=discAmt(),sub=total;total=Math.round((total-dd)*100)/100;profit-=dd;
       items.forEach(i=>{prods.find(p=>p.id===i.id).stock-=i.qty});
-      const s={id:uid(),co:C.code,no:Math.max(0,...mine(sales).map(x=>x.no||0))+1,ts:Date.now(),by:U.name,items,total,profit,disc:dd,sub,pay:pp.length>1?'Split':pp[0].m,pays:pp,paid:sum,change:chg,cust:(cu.name||cu.phone||cu.note)?cu:null};
+      const s={id:uid(),co:C.code,br:BR(),no:Math.max(0,...bmine(sales).map(x=>x.no||0))+1,ts:Date.now(),by:U.name,items,total,profit,disc:dd,sub,pay:pp.length>1?'Split':pp[0].m,pays:pp,paid:sum,change:chg,cust:(cu.name||cu.phone||cu.note)?cu:null};
       sales.push(s);save(K.p,prods);save(K.l,sales);rec('moves',items.map(i=>mv(prods.find(p=>p.id===i.id),-i.qty,'sale','#'+s.no)));cart=[];rc=s.id;paid='';disc={on:false,type:'%',val:''};pays=[{m:'Cash',amt:'',ref:''}];cust={name:'',phone:'',note:''};toast('Sale completed: '+money(total)+' ('+s.pay+')');
       const low=items.map(i=>prods.find(p=>p.id===i.id)).filter(p=>p.stock<=5);
       if(low.length)setTimeout(()=>toast('Low stock: '+low.map(p=>p.name+' ('+p.stock+')').join(', '),'warn'),700);
