@@ -48,3 +48,20 @@ Existing companies have no recovery code yet: log in as admin, open Settings and
 - People with more than one branch can switch in **Settings > Branch**. Admins also get **All branches (reports)** for combined Reports, Stock report, Expenses, history and audit log. Selling and stock changes need a single branch.
 - Existing companies get one branch called **Main** automatically the first time someone opens the app after this update, and all current data belongs to it.
 - Deploy BOTH `server.js` and `public/`.
+
+## Currency and number format
+- Amounts use thousands separators (1,234,567.50) and quantities too (1,250).
+- **Settings > Currency** (admin) sets the company currency symbol: $, £, €, KSh, TSh, USh, ₦, GH₵, R, ₹ or your own. It applies to every screen and receipt, for all users. Existing amounts are not converted. Redeploy `server.js` as well as `public/`.
+
+## Import, renaming and custom columns
+- **Settings > Products & categories > Import**: upload a CSV or Excel file (Excel needs internet the first time to load the reader; CSV works offline). Map the file's columns to Category, Product, Barcode, Buying price, Selling price, Stock and any custom columns, choose how stock should be handled for products that already exist, check the preview and import. A template can be downloaded.
+- **Edit** buttons on categories and products let you rename them (and change price, barcode, category and extra fields). Past receipts keep the names they were sold under.
+- **Custom columns** (admin and manager): add extra fields such as Brand or Expiry date to categories or products. They appear in the add/edit forms, tables, imports and CSV exports, and in backups. Redeploy `server.js` too, since the column list is stored on the company.
+
+## Reports mini-tabs, trends, price history
+- **Reports** is split into mini-tabs: Overview (today/week + weekly graph), Sales (transactions), Profit (summary + daily profit), Payments (methods + refunds), Monthly (monthly graph), and **Top sellers & trends**. The period card has quick ranges (Today, 7 days, 30 days, This month, This year, All time) plus From/To dates.
+- **Top sellers & trends**: revenue/sales/profit against the previous period, top 10 products, top sellers table, categories, busiest hours and days, slow movers, and cashier performance.
+- **Settings > Price history** (admin, manager): every buying/selling price change with old and new price, % change and who made it. Also reachable with **Prices** next to each product.
+- The checkout discount option was removed. Receipts and reports still show discounts on older sales.
+- Tables: choose how many rows to show (5, 10, 25, 50, 100 or All); the choice is remembered, and each table shows its range (for example 11-20 of 57).
+- Only `public/index.html` changed in this version.
