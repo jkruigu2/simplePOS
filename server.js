@@ -14,7 +14,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 const M = (n, f = {}) => mongoose.model(n, new mongoose.Schema(
   { co: { type: String, index: true }, id: String, ...f }, { strict: false, versionKey: false, id: false }));
 const Company = mongoose.model('Company', new mongoose.Schema(
-  { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String, cur: String, fields: { type: Array, default: [] }, rh: String }, { versionKey: false }));
+  { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String, cur: String, fields: { type: Array, default: [] }, v: { type: Object, default: {} }, rcpt: { type: Object, default: {} }, rh: String }, { versionKey: false }));
 const User = M('User', { user: String, name: String, role: String, h: String });
 const Branch = M('Branch', { name: String, loc: String });
 const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund');
@@ -52,6 +52,24 @@ const replaceAll = (Mo, q, a) => Mo.bulkWrite([
   { deleteMany: { filter: { ...scope(q), id: { $nin: a.map(x => x.id) } } } },
   ...a.map(x => ({ replaceOne: { filter: { co: q.u.co, id: x.id }, replacement: x, upsert: true } }))]);
 
+// ---------- change counters (devices poll /api/ver and only fetch what changed) ----------
+const VKEY = { '/api/sales': 'sales', '/api/moves': 'moves', '/api/logs': 'logs', '/api/rets': 'rets', '/api/prods': 'prods', '/api/cats': 'cats', '/api/expenses': 'expenses' };
+app.use('/api', (q, s, n) => {
+  if (q.method !== 'GET') {
+    const p = '/api' + q.path, m = q.method;
+    s.on('finish', () => {
+      if (s.statusCode >= 400 || !q.u) return;
+      let ks = [];
+      if (m === 'PUT' && VKEY[p]) ks = [VKEY[p]];
+      else if (p.startsWith('/api/sales/')) ks = ['salesx'];
+      else if (p === '/api/restore') ks = ['org', 'salesx', 'prods', 'cats', 'expenses', 'moves', 'logs', 'rets'];
+      else if (/^\/api\/(users|branches|company|password|recovery)/.test(p)) ks = ['org'];
+      if (ks.length) Company.updateOne({ code: q.u.co }, { $inc: Object.fromEntries(ks.map(k => ['v.' + k, 1])) }).catch(() => {});
+    });
+  }
+  n();
+});
+
 // ---------- health check ----------
 app.get('/api/health', wrap(async (q, s) => {
   if (mongoose.connection.readyState !== 1) fail(503, 'Database not connected');
@@ -79,15 +97,52 @@ app.post('/api/login', wrap(async (q, s) => {
 
 // ---------- data ----------
 app.get('/api/data', auth, wrap(async (q, s) => {
+  const now = Date.now();
   await ensureBranch(q.u.co);
   q.u = await User.findOne({ id: q.u.id }).lean();
-  const f = scope(q), r = q.u.role, mgr = r !== 'cashier', adm = r === 'admin';
-  const L = (m, lim) => { let c = m.find(f).select('-_id'); if (lim) c = c.sort({ ts: -1 }).limit(lim); return c.lean(); };
+  const days = Math.min(Math.max(parseInt(q.query.days) || 35, 1), 3650), cut = now - days * 864e5;   // only recent sales are sent; older ones load on request
+  const r = q.u.role, mgr = r !== 'cashier', adm = r === 'admin';
+  const L = (m, flt = {}, lim, sort) => { let c = m.find({ ...scope(q), ...flt }).select('-_id'); if (sort) c = c.sort(sort); if (lim) c = c.limit(lim); return c.lean(); };
   const [company, users, branches, cats, prods, sales, expenses, rets, moves, logs] = await Promise.all([
     Company.findOne({ code: q.u.co }).select('-_id -rh').lean(), User.find({ co: q.u.co }).select('-_id -h').lean(),
     Branch.find(adm ? { co: q.u.co } : { co: q.u.co, id: { $in: q.u.br || [] } }).select('-_id').lean(),
-    L(Cat), L(Prod), L(Sale), mgr ? L(Expense) : [], mgr ? L(Refund) : [], mgr ? L(Move, 500) : [], adm ? L(Log, 500) : []]);
-  s.json({ company, users, branches, cats, prods, sales, expenses, rets, moves, logs, me: q.u.id });
+    L(Cat), L(Prod), L(Sale, { ts: { $gte: cut } }, 5000, { ts: -1 }),
+    mgr ? L(Expense, { ts: { $gte: cut } }) : [], mgr ? L(Refund, { ts: { $gte: cut } }) : [],
+    mgr ? L(Move, {}, 500, { ts: -1 }) : [], adm ? L(Log, {}, 500, { ts: -1 }) : []]);
+  const win = sales.length >= 5000 ? Math.min(...sales.map(x => x.ts)) : cut;
+  s.json({ company, users, branches, cats, prods, sales, expenses, rets, moves, logs, me: q.u.id, v: (company && company.v) || {}, now, win });
+}));
+app.get('/api/ver', auth, wrap(async (q, s) => {   // tiny: lets a device check whether anything changed
+  const c = await Company.findOne({ code: q.u.co }).select('v -_id').lean(); s.json({ v: (c && c.v) || {} });
+}));
+app.get('/api/range', auth, wrap(async (q, s) => {   // older sales, refunds and expenses on request
+  const f = { ...scope(q), ts: { $gte: Number(q.query.from) || 0, $lt: Number(q.query.to) || Date.now() } }, mgr = q.u.role !== 'cashier';
+  const [sales, rets, expenses] = await Promise.all([Sale.find(f).select('-_id').sort({ ts: -1 }).limit(20000).lean(), mgr ? Refund.find(f).select('-_id').lean() : [], mgr ? Expense.find(f).select('-_id').lean() : []]);
+  s.json({ sales, rets, expenses, truncated: sales.length >= 20000 });
+}));
+const DELTA = { sales: [Sale, 'c'], moves: [Move, 'm'], logs: [Log, 'a'], rets: [Refund, 'm'] };
+app.get('/api/delta/:c', auth, wrap(async (q, s) => {   // only records added since the last check
+  const now = Date.now(), d = DELTA[q.params.c], r = q.u.role;
+  if (!d) fail(404, 'Unknown collection');
+  if ((d[1] === 'm' && r === 'cashier') || (d[1] === 'a' && r !== 'admin')) return s.json({ docs: [], now });
+  const docs = await d[0].find({ ...scope(q), at: { $gt: Number(q.query.after) || 0 } }).select('-_id').sort({ at: 1 }).limit(3000).lean();
+  s.json({ docs, now, more: docs.length >= 3000, last: docs.length ? docs[docs.length - 1].at : 0 });
+}));
+const COL2 = { prods: Prod, cats: Cat, expenses: Expense };
+app.get('/api/col/:c', auth, wrap(async (q, s) => {   // one whole collection (products, categories, expenses)
+  const now = Date.now(), m = COL2[q.params.c];
+  if (!m) fail(404, 'Unknown collection');
+  if (q.params.c === 'expenses' && q.u.role === 'cashier') return s.json({ docs: [], now });
+  const f = { ...scope(q) }; if (q.params.c === 'expenses') f.ts = { $gte: Number(q.query.from) || 0 };
+  s.json({ docs: await m.find(f).select('-_id').lean(), now });
+}));
+app.get('/api/monthly', auth, need('admin', 'manager'), wrap(async (q, s) => {   // sales totals per month, worked out by the database
+  const match = { ...scope(q), ts: { $gte: Number(q.query.from), $lt: Number(q.query.to) } };
+  if (q.query.br && q.query.br !== 'all') { if (!okBr(q, q.query.br)) fail(403, 'Not allowed'); match.br = q.query.br; }
+  let rows;
+  try { rows = await Sale.aggregate([{ $match: match }, { $group: { _id: { $month: { date: { $toDate: '$ts' }, timezone: String(q.query.tz || 'UTC') } }, n: { $sum: 1 }, rev: { $sum: '$total' }, profit: { $sum: '$profit' } } }]); }
+  catch (e) { fail(400, 'Could not total the months'); }
+  s.json({ months: rows.map(r => ({ m: r._id - 1, n: r.n, rev: r.rev, profit: r.profit })) });
 }));
 app.put('/api/cats', auth, need('admin', 'manager'), wrap(async (q, s) => {
   await replaceAll(Cat, q, clean(q.body, q)); s.json({ ok: 1 });
@@ -102,7 +157,7 @@ app.put('/api/prods', auth, wrap(async (q, s) => {
 app.put('/api/sales', auth, wrap(async (q, s) => {   // append-only
   const co = q.u.co, a = clean(q.body, q);
   const have = new Set((await Sale.find({ co, id: { $in: a.map(x => x.id) } }).select('id').lean()).map(x => x.id));
-  const n = a.filter(x => !have.has(x.id)).map(x => ({ ...x, by: q.u.name }));
+  const n = a.filter(x => !have.has(x.id)).map(x => ({ ...x, by: q.u.name, at: Date.now() }));
   if (n.length) await Sale.insertMany(n);
   s.json({ ok: 1 });
 }));
@@ -124,7 +179,7 @@ app.put('/api/expenses', auth, need('admin', 'manager'), wrap(async (q, s) => {
 const append = (path, Mo, roles) => app.put(path, auth, need(...roles), wrap(async (q, s) => {   // append-only records
   const co = q.u.co, a = clean(q.body, q);
   const have = new Set((await Mo.find({ co, id: { $in: a.map(x => x.id) } }).select('id').lean()).map(x => x.id));
-  const n = a.filter(x => !have.has(x.id)).map(x => ({ ...x, by: q.u.name }));
+  const n = a.filter(x => !have.has(x.id)).map(x => ({ ...x, by: q.u.name, at: Date.now() }));
   if (n.length) await Mo.insertMany(n);
   s.json({ ok: 1 });
 }));
@@ -138,6 +193,7 @@ app.post('/api/restore', auth, need('admin'), wrap(async (q, s) => {   // replac
     await Branch.deleteMany({ co }); await Branch.insertMany(d.branches.filter(x => x && x.id).map(x => ({ ...x, co })));
   } else { await Branch.deleteMany({ co }); await newBranch(co, 'Main', '', 'main'); }
   const put = async (Mo, a) => { await Mo.deleteMany({ co }); a = fix(a); if (Array.isArray(a) && a.length) await Mo.insertMany(clean(a, q)); };
+  if (d.rcpt && typeof d.rcpt === 'object') await Company.updateOne({ code: co }, { $set: { rcpt: d.rcpt } });
   if (Array.isArray(d.fields)) await Company.updateOne({ code: co }, { $set: { fields: d.fields.slice(0, 30) } });
   await put(Cat, d.cats); await put(Prod, d.prods); await put(Sale, d.sales); await put(Expense, d.expenses);
   await put(Move, d.moves); await put(Log, d.logs); await put(Refund, d.rets);
@@ -150,6 +206,14 @@ app.patch('/api/company', auth, need('admin'), wrap(async (q, s) => {   // curre
   await Company.updateOne({ code: q.u.co }, { $set: { cur } }); s.json({ ok: 1, cur });
 }));
 
+app.patch('/api/company/receipt', auth, need('admin'), wrap(async (q, s) => {   // receipt design
+  const d = q.body.rcpt || {}, B = x => !!x;
+  const rc = { logo: typeof d.logo === 'string' && /^data:image\/(png|jpeg|webp);base64,/.test(d.logo) && d.logo.length <= 160000 ? d.logo : '', bw: B(d.bw),
+    head: String(d.head || '').slice(0, 300), foot: String(d.foot || '').slice(0, 200), paper: ['58', '80', 'a4'].includes(d.paper) ? d.paper : '80',
+    font: d.font === 'sans' ? 'sans' : 'mono', size: ['s', 'm', 'l'].includes(d.size) ? d.size : 'm',
+    motto: B(d.motto), cashier: B(d.cashier), customer: B(d.customer), pay: B(d.pay), branch: B(d.branch) };
+  await Company.updateOne({ code: q.u.co }, { $set: { rcpt: rc } }); s.json({ ok: 1, rcpt: rc });
+}));
 app.patch('/api/company/fields', auth, need('admin', 'manager'), wrap(async (q, s) => {   // custom columns for categories / products
   const a = Array.isArray(q.body.fields) ? q.body.fields : [];
   const fields = a.slice(0, 30).filter(x => x && x.id && String(x.name || '').trim() && ['prod', 'cat'].includes(x.t) && ['text', 'number', 'date'].includes(x.type))

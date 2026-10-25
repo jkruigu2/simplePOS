@@ -65,3 +65,14 @@ Existing companies have no recovery code yet: log in as admin, open Settings and
 - The checkout discount option was removed. Receipts and reports still show discounts on older sales.
 - Tables: choose how many rows to show (5, 10, 25, 50, 100 or All); the choice is remembered, and each table shows its range (for example 11-20 of 57).
 - Only `public/index.html` changed in this version.
+
+## Faster loading for big shops
+- The app now loads only the last 35 days of sales when it opens. Older sales load the first time a report needs them (for example "All time", or a date range further back) and stay loaded for that session.
+- Every 30 seconds each device sends one tiny request to ask "has anything changed?" and then downloads only what changed: new sales, stock changes or the product list. Before, it downloaded everything every time.
+- Monthly totals are worked out by the database, so a whole year of sales is never downloaded for the Monthly tab.
+- The Sales tab shows the newest 2,000 transactions of the chosen period (use a narrower period or Export CSV for the rest).
+- Redeploy BOTH `server.js` and `public/index.html`.
+
+## Receipt design
+- **Settings > Receipt design** (admin): logo (resized automatically), extra header lines, footer message, paper (58 mm, 80 mm, A4), text size, font, and what to show (motto, branch, cashier, customer, payment). A live preview updates as you type.
+- The design is saved on the company and used on every device. When printing, choose the same paper size in the printer dialog.

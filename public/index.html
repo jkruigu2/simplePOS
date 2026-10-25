@@ -130,11 +130,11 @@ async function boot(q){
   await flushQ();
   if(pend()){if(!cats.length&&!prods.length){const c=load('pos3_cache',null);if(c)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,session}=c)}return}
   try{const r=await api('GET','/api/data?days=35',null,q);
-    const keep=(a,w)=>loadedFrom!==null&&loadedFrom<w?a.filter(x=>x.ts<w):[];   // older records loaded earlier are kept
-    const oS=keep(sales,r.win),oR=keep(rets,r.win),oE=keep(expenses,r.win);
+    const wn=r.win||0,keep=(a,w)=>loadedFrom!==null&&loadedFrom<w?a.filter(x=>x.ts<w):[];   // older records loaded earlier are kept (no window = everything was sent)
+    const oS=keep(sales,wn),oR=keep(rets,wn),oE=keep(expenses,wn);
     cos=[r.company];users=r.users;cats=r.cats;prods=r.prods;branches=r.branches||[];moves=r.moves||[];logs=r.logs||[];session=r.me;
     sales=[...r.sales,...oS];rets=[...(r.rets||[]),...oR];expenses=[...(r.expenses||[]),...oE];
-    loadedFrom=loadedFrom===null?r.win:Math.min(loadedFrom,r.win);ver=r.v||{};['sales','moves','logs','rets'].forEach(k=>syncAt[k]=r.now);cacheState()}
+    loadedFrom=loadedFrom===null?wn:Math.min(loadedFrom,wn);ver=r.v||{};['sales','moves','logs','rets'].forEach(k=>syncAt[k]=r.now);cacheState()}
   catch(e){const c=load('pos3_cache',null);if(e.net&&c&&token)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,session}=c);else throw e}}
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const CUR=()=>{try{return (C&&C.cur)||'$'}catch(e){return '$'}};
