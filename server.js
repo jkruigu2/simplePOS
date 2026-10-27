@@ -17,8 +17,8 @@ const Company = mongoose.model('Company', new mongoose.Schema(
   { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String, cur: String, fields: { type: Array, default: [] }, v: { type: Object, default: {} }, rcpt: { type: Object, default: {} }, rh: String }, { versionKey: false }));
 const User = M('User', { user: String, name: String, role: String, h: String });
 const Branch = M('Branch', { name: String, loc: String });
-const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund');
-const DATA = [Cat, Prod, Sale, Expense, Move, Log, Refund];   // everything that belongs to one branch (has a `br` field)
+const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund'), Lay = M('Lay'), Ledger = M('Ledger'), Cust = M('Cust');
+const DATA = [Cat, Prod, Sale, Expense, Move, Log, Refund, Lay, Ledger];   // everything that belongs to one branch (has a `br` field)
 
 // ---------- helpers ----------
 const ROLES = ['admin', 'manager', 'cashier'];
@@ -53,7 +53,7 @@ const replaceAll = (Mo, q, a) => Mo.bulkWrite([
   ...a.map(x => ({ replaceOne: { filter: { co: q.u.co, id: x.id }, replacement: x, upsert: true } }))]);
 
 // ---------- change counters (devices poll /api/ver and only fetch what changed) ----------
-const VKEY = { '/api/sales': 'sales', '/api/moves': 'moves', '/api/logs': 'logs', '/api/rets': 'rets', '/api/prods': 'prods', '/api/cats': 'cats', '/api/expenses': 'expenses' };
+const VKEY = { '/api/sales': 'sales', '/api/moves': 'moves', '/api/logs': 'logs', '/api/rets': 'rets', '/api/prods': 'prods', '/api/cats': 'cats', '/api/expenses': 'expenses', '/api/custs': 'custs', '/api/lays': 'lays', '/api/ledger': 'ledger' };
 app.use('/api', (q, s, n) => {
   if (q.method !== 'GET') {
     const p = '/api' + q.path, m = q.method;
@@ -62,7 +62,7 @@ app.use('/api', (q, s, n) => {
       let ks = [];
       if (m === 'PUT' && VKEY[p]) ks = [VKEY[p]];
       else if (p.startsWith('/api/sales/')) ks = ['salesx'];
-      else if (p === '/api/restore') ks = ['org', 'salesx', 'prods', 'cats', 'expenses', 'moves', 'logs', 'rets'];
+      else if (p === '/api/restore') ks = ['org', 'salesx', 'prods', 'cats', 'expenses', 'moves', 'logs', 'rets', 'custs', 'lays', 'ledger'];
       else if (/^\/api\/(users|branches|company|password|recovery)/.test(p)) ks = ['org'];
       if (ks.length) Company.updateOne({ code: q.u.co }, { $inc: Object.fromEntries(ks.map(k => ['v.' + k, 1])) }).catch(() => {});
     });
@@ -103,14 +103,16 @@ app.get('/api/data', auth, wrap(async (q, s) => {
   const days = Math.min(Math.max(parseInt(q.query.days) || 35, 1), 3650), cut = now - days * 864e5;   // only recent sales are sent; older ones load on request
   const r = q.u.role, mgr = r !== 'cashier', adm = r === 'admin';
   const L = (m, flt = {}, lim, sort) => { let c = m.find({ ...scope(q), ...flt }).select('-_id'); if (sort) c = c.sort(sort); if (lim) c = c.limit(lim); return c.lean(); };
-  const [company, users, branches, cats, prods, sales, expenses, rets, moves, logs] = await Promise.all([
+  const [company, users, branches, cats, prods, sales, expenses, rets, moves, logs, custs, lays, bl] = await Promise.all([
     Company.findOne({ code: q.u.co }).select('-_id -rh').lean(), User.find({ co: q.u.co }).select('-_id -h').lean(),
     Branch.find(adm ? { co: q.u.co } : { co: q.u.co, id: { $in: q.u.br || [] } }).select('-_id').lean(),
     L(Cat), L(Prod), L(Sale, { ts: { $gte: cut } }, 5000, { ts: -1 }),
     mgr ? L(Expense, { ts: { $gte: cut } }) : [], mgr ? L(Refund, { ts: { $gte: cut } }) : [],
-    mgr ? L(Move, {}, 500, { ts: -1 }) : [], adm ? L(Log, {}, 500, { ts: -1 }) : []]);
+    mgr ? L(Move, {}, 500, { ts: -1 }) : [], adm ? L(Log, {}, 500, { ts: -1 }) : [],
+    Cust.find({ co: q.u.co }).select('-_id').lean(), L(Lay, { $or: [{ status: 'open' }, { ts: { $gte: cut } }] }), Ledger.aggregate([{ $match: { co: q.u.co } }, { $group: { _id: '$cid', bal: { $sum: '$amt' } } }])]);
+  const bals = Object.fromEntries(bl.map(x => [x._id, Math.round(x.bal * 100) / 100]));
   const win = sales.length >= 5000 ? Math.min(...sales.map(x => x.ts)) : cut;
-  s.json({ company, users, branches, cats, prods, sales, expenses, rets, moves, logs, me: q.u.id, v: (company && company.v) || {}, now, win });
+  s.json({ company, users, branches, cats, prods, sales, expenses, rets, moves, logs, custs, lays, bals, me: q.u.id, v: (company && company.v) || {}, now, win });
 }));
 app.get('/api/ver', auth, wrap(async (q, s) => {   // tiny: lets a device check whether anything changed
   const c = await Company.findOne({ code: q.u.co }).select('v -_id').lean(); s.json({ v: (c && c.v) || {} });
@@ -120,12 +122,12 @@ app.get('/api/range', auth, wrap(async (q, s) => {   // older sales, refunds and
   const [sales, rets, expenses] = await Promise.all([Sale.find(f).select('-_id').sort({ ts: -1 }).limit(20000).lean(), mgr ? Refund.find(f).select('-_id').lean() : [], mgr ? Expense.find(f).select('-_id').lean() : []]);
   s.json({ sales, rets, expenses, truncated: sales.length >= 20000 });
 }));
-const DELTA = { sales: [Sale, 'c'], moves: [Move, 'm'], logs: [Log, 'a'], rets: [Refund, 'm'] };
+const DELTA = { lays: [Lay, 'c'], custs: [Cust, 'c'], sales: [Sale, 'c'], moves: [Move, 'm'], logs: [Log, 'a'], rets: [Refund, 'm'] };
 app.get('/api/delta/:c', auth, wrap(async (q, s) => {   // only records added since the last check
   const now = Date.now(), d = DELTA[q.params.c], r = q.u.role;
   if (!d) fail(404, 'Unknown collection');
   if ((d[1] === 'm' && r === 'cashier') || (d[1] === 'a' && r !== 'admin')) return s.json({ docs: [], now });
-  const docs = await d[0].find({ ...scope(q), at: { $gt: Number(q.query.after) || 0 } }).select('-_id').sort({ at: 1 }).limit(3000).lean();
+  const docs = await d[0].find({ ...(q.params.c === 'custs' ? { co: q.u.co } : scope(q)), at: { $gt: Number(q.query.after) || 0 } }).select('-_id').sort({ at: 1 }).limit(3000).lean();
   s.json({ docs, now, more: docs.length >= 3000, last: docs.length ? docs[docs.length - 1].at : 0 });
 }));
 const COL2 = { prods: Prod, cats: Cat, expenses: Expense };
@@ -186,6 +188,7 @@ const append = (path, Mo, roles) => app.put(path, auth, need(...roles), wrap(asy
 append('/api/moves', Move, ['admin', 'manager', 'cashier']);
 append('/api/logs', Log, ['admin', 'manager', 'cashier']);
 append('/api/rets', Refund, ['admin', 'manager']);
+append('/api/ledger', Ledger, ['admin', 'manager', 'cashier']);
 app.post('/api/restore', auth, need('admin'), wrap(async (q, s) => {   // replace this company's data with a backup
   const co = q.u.co, d = q.body || {};
   const fix = a => Array.isArray(a) ? a.map(x => ({ br: 'main', ...x })) : a;   // older backups have no branches
@@ -196,7 +199,8 @@ app.post('/api/restore', auth, need('admin'), wrap(async (q, s) => {   // replac
   if (d.rcpt && typeof d.rcpt === 'object') await Company.updateOne({ code: co }, { $set: { rcpt: d.rcpt } });
   if (Array.isArray(d.fields)) await Company.updateOne({ code: co }, { $set: { fields: d.fields.slice(0, 30) } });
   await put(Cat, d.cats); await put(Prod, d.prods); await put(Sale, d.sales); await put(Expense, d.expenses);
-  await put(Move, d.moves); await put(Log, d.logs); await put(Refund, d.rets);
+  await put(Move, d.moves); await put(Log, d.logs); await put(Refund, d.rets); await put(Lay, d.lays); await put(Ledger, d.ledger);
+  await Cust.deleteMany({ co }); if (Array.isArray(d.custs) && d.custs.length) await Cust.insertMany(d.custs.filter(x => x && x.id).map(x => ({ ...x, co })));
   s.json({ ok: 1 });
 }));
 
@@ -208,7 +212,7 @@ app.patch('/api/company', auth, need('admin'), wrap(async (q, s) => {   // curre
 
 app.patch('/api/company/receipt', auth, need('admin'), wrap(async (q, s) => {   // receipt design
   const d = q.body.rcpt || {}, B = x => !!x;
-  const rc = { logo: typeof d.logo === 'string' && /^data:image\/(png|jpeg|webp);base64,/.test(d.logo) && d.logo.length <= 160000 ? d.logo : '', bw: B(d.bw),
+  const rc = { logo: d.logo === 'builtin' ? 'builtin' : typeof d.logo === 'string' && /^data:image\/(png|jpeg|webp);base64,/.test(d.logo) && d.logo.length <= 160000 ? d.logo : '', bw: B(d.bw),
     head: String(d.head || '').slice(0, 300), foot: String(d.foot || '').slice(0, 200), paper: ['58', '80', 'a4'].includes(d.paper) ? d.paper : '80',
     font: d.font === 'sans' ? 'sans' : 'mono', size: ['s', 'm', 'l'].includes(d.size) ? d.size : 'm',
     motto: B(d.motto), cashier: B(d.cashier), customer: B(d.customer), pay: B(d.pay), branch: B(d.branch) };
@@ -219,6 +223,43 @@ app.patch('/api/company/fields', auth, need('admin', 'manager'), wrap(async (q, 
   const fields = a.slice(0, 30).filter(x => x && x.id && String(x.name || '').trim() && ['prod', 'cat'].includes(x.t) && ['text', 'number', 'date'].includes(x.type))
     .map(x => ({ id: String(x.id).slice(0, 24), t: x.t, name: String(x.name).trim().slice(0, 40), type: x.type }));
   await Company.updateOne({ code: q.u.co }, { $set: { fields } }); s.json({ ok: 1, fields });
+}));
+
+// ---------- customers, credit ledger, layaways ----------
+app.put('/api/custs', auth, wrap(async (q, s) => {   // add or change customer accounts (never deleted, only archived)
+  if (!Array.isArray(q.body)) fail(400, 'Bad data');
+  for (const x of q.body.slice(0, 500)) {
+    if (!x || !x.id || !String(x.name || '').trim()) continue;
+    const old = await Cust.findOne({ co: q.u.co, id: String(x.id) }).lean();
+    const limit = q.u.role === 'cashier' ? (old ? old.limit || 0 : 0) : Math.max(0, Number(x.limit) || 0);   // only managers set credit limits
+    const doc = { id: String(x.id), co: q.u.co, name: String(x.name).trim().slice(0, 80), phone: String(x.phone || '').trim().slice(0, 30), note: String(x.note || '').slice(0, 200), limit, archived: !!x.archived, at: Date.now() };
+    await Cust.replaceOne({ co: q.u.co, id: doc.id }, doc, { upsert: true });
+  }
+  s.json({ ok: 1 });
+}));
+app.put('/api/lays', auth, wrap(async (q, s) => {   // layaways change over time (payments, completion), so they are saved in place
+  for (const x of clean(q.body, q).slice(0, 200)) await Lay.replaceOne({ co: q.u.co, id: x.id }, { ...x, at: Date.now() }, { upsert: true });
+  s.json({ ok: 1 });
+}));
+app.get('/api/bals', auth, wrap(async (q, s) => {
+  const bl = await Ledger.aggregate([{ $match: { co: q.u.co } }, { $group: { _id: '$cid', bal: { $sum: '$amt' } } }]);
+  s.json({ bals: Object.fromEntries(bl.map(x => [x._id, Math.round(x.bal * 100) / 100])) });
+}));
+app.get('/api/ledger', auth, wrap(async (q, s) => {   // one customer's statement
+  s.json({ docs: await Ledger.find({ co: q.u.co, cid: String(q.query.cid || '') }).select('-_id').sort({ ts: 1 }).limit(2000).lean() });
+}));
+app.get('/api/ledgerall', auth, need('admin'), wrap(async (q, s) => {   // for the full backup
+  s.json({ docs: await Ledger.find({ co: q.u.co }).select('-_id').sort({ ts: 1 }).limit(100000).lean() });
+}));
+app.get('/api/serial', auth, wrap(async (q, s) => {   // which receipt did this serial number / IMEI go out on?
+  const sn = String(q.query.sn || '').trim();
+  if (sn.length < 4) return s.json({ docs: [] });
+  const rx = sn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  s.json({ docs: await Sale.find({ ...scope(q), 'items.sn': { $regex: rx, $options: 'i' } }).select('-_id').sort({ ts: -1 }).limit(30).lean() });
+}));
+app.get('/api/lastsold', auth, need('admin', 'manager'), wrap(async (q, s) => {   // when did each product last sell (for the aged stock report)
+  const rows = await Sale.aggregate([{ $match: scope(q) }, { $unwind: '$items' }, { $group: { _id: '$items.id', last: { $max: '$ts' } } }]);
+  s.json({ last: Object.fromEntries(rows.map(r => [r._id, r.last])) });
 }));
 
 // ---------- branches (admin only) ----------

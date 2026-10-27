@@ -76,3 +76,15 @@ Existing companies have no recovery code yet: log in as admin, open Settings and
 ## Receipt design
 - **Settings > Receipt design** (admin): logo (resized automatically), extra header lines, footer message, paper (58 mm, 80 mm, A4), text size, font, and what to show (motto, branch, cashier, customer, payment). A live preview updates as you type.
 - The design is saved on the company and used on every device. When printing, choose the same paper size in the printer dialog.
+
+## Your logo
+- `public/logo.png` (login screen), `public/icon-192.png` and `icon-512.png` (app icon, favicon, home-screen icon) and `public/receipt-logo.jpg` (receipts) come from the Kamau Electronics logo. Replace these files with other images of the same names to rebrand.
+- Receipts print `receipt-logo.jpg` by default. In **Settings > Receipt design** you can remove it, upload another logo, or tap **Use built-in logo** to bring it back. A good extra header line is: `TVs · Woofers · M-KOPA Payment · Phone Repair`.
+
+## Serial numbers, customer accounts, layaway, aged stock
+- **Remove an item**: every cart line has a ✕ button (all roles).
+- **Serial numbers / IMEI**: tick *Track serial numbers* when adding a product and paste its serials (one per line). Adding stock to such a product takes a list of serials. At checkout you pick the unit (or scan or type its IMEI); the serial prints on the receipt and shows in stock history. Refunds and deleted receipts return the serial to stock. **Settings > Serial / IMEI lookup** finds a unit in stock or the receipt, customer and date it was sold on.
+- **Customers and credit sales**: **Settings > Customers** keeps accounts with phone, notes and a credit limit (set by admin/manager). In the cart pick a customer account, then choose the payment method **Credit** (alone or split with cash). Balances, payments received, statements (printable) and refunds "to account" are tracked per customer. Cashiers cannot go over a customer's limit.
+- **Deposit and layaway**: in the cart tap **Layaway**, enter the customer, deposit and optional collect-by date. The items are set aside (stock and serials reserved) and a deposit receipt prints. **Settings > Layaway** lists open layaways: add payments, print receipts, **Complete** once paid in full (this becomes the sale, with the original payments) or **Cancel** (admin/manager) with a refund and return to stock.
+- **Aged stock** (admin, manager): **Settings > Aged stock** lists products unsold for 30/60/90/180+ days with the money tied up in them, and exports to CSV.
+- Redeploy BOTH `server.js` and `public/`. Backups now include customers, layaways and the credit ledger.
