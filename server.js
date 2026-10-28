@@ -14,7 +14,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 const M = (n, f = {}) => mongoose.model(n, new mongoose.Schema(
   { co: { type: String, index: true }, id: String, ...f }, { strict: false, versionKey: false, id: false }));
 const Company = mongoose.model('Company', new mongoose.Schema(
-  { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String, cur: String, fields: { type: Array, default: [] }, v: { type: Object, default: {} }, rcpt: { type: Object, default: {} }, rh: String }, { versionKey: false }));
+  { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String, cur: String, fields: { type: Array, default: [] }, v: { type: Object, default: {} }, rcpt: { type: Object, default: {} }, rh: String, renc: String }, { versionKey: false }));
 const User = M('User', { user: String, name: String, role: String, h: String });
 const Branch = M('Branch', { name: String, loc: String });
 const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund'), Lay = M('Lay'), Ledger = M('Ledger'), Cust = M('Cust');
@@ -26,6 +26,10 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const fail = (c, m) => { const e = new Error(m); e.status = c; throw e; };
 const wrap = f => (q, s) => f(q, s).catch(e => s.status(e.status || 500).json({ error: e.message || 'Server error' }));
 const rcode = () => [...crypto.randomBytes(12)].map(b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('').replace(/(.{4})(?=.)/g, '$1-');
+// The recovery code is kept encrypted (not just hashed) so the admin can look at it again after typing their password.
+const RK = () => crypto.createHash('sha256').update('rc:' + SECRET).digest();
+const encCode = c => { const iv = crypto.randomBytes(12), k = crypto.createCipheriv('aes-256-gcm', RK(), iv), e = Buffer.concat([k.update(c, 'utf8'), k.final()]); return [iv, k.getAuthTag(), e].map(b => b.toString('base64')).join('.'); };
+const decCode = x => { try { const [iv, tag, e] = String(x).split('.').map(b => Buffer.from(b, 'base64')), k = crypto.createDecipheriv('aes-256-gcm', RK(), iv); k.setAuthTag(tag); return Buffer.concat([k.update(e), k.final()]).toString('utf8'); } catch (e) { return null; } };
 const tok = u => jwt.sign({ uid: u.id }, SECRET, { expiresIn: '7d' });
 const pub = u => ({ id: u.id, co: u.co, user: u.user, name: u.name, role: u.role, br: u.br || [] });
 // Branch access: admins see every branch; managers and cashiers only the branches assigned to them.
@@ -63,7 +67,7 @@ app.use('/api', (q, s, n) => {
       if (m === 'PUT' && VKEY[p]) ks = [VKEY[p]];
       else if (p.startsWith('/api/sales/')) ks = ['salesx'];
       else if (p === '/api/restore') ks = ['org', 'salesx', 'prods', 'cats', 'expenses', 'moves', 'logs', 'rets', 'custs', 'lays', 'ledger'];
-      else if (/^\/api\/(users|branches|company|password|recovery)/.test(p)) ks = ['org'];
+      else if (p !== '/api/recovery/show' && /^\/api\/(users|branches|company|password|recovery)/.test(p)) ks = ['org'];
       if (ks.length) Company.updateOne({ code: q.u.co }, { $inc: Object.fromEntries(ks.map(k => ['v.' + k, 1])) }).catch(() => {});
     });
   }
@@ -83,7 +87,7 @@ app.post('/api/register', wrap(async (q, s) => {
   if (!code || !user || !d.name || !d.pass || String(d.pass).length < 4) fail(400, 'Fill in all fields (password min 4 characters).');
   if (await Company.findOne({ code })) fail(409, 'That company code is already in use.');
   const recovery = rcode();
-  await Company.create({ code, name: String(d.name).trim(), loc: d.loc, motto: d.motto, phone: d.phone, rh: await bcrypt.hash(recovery, 10) });
+  await Company.create({ code, name: String(d.name).trim(), loc: d.loc, motto: d.motto, phone: d.phone, rh: await bcrypt.hash(recovery, 10), renc: encCode(recovery) });
   await newBranch(code, 'Main', '', 'main');
   const u = await User.create({ id: uid(), co: code, user, name: String(d.user).trim(), role: 'admin', br: [], h: await bcrypt.hash(String(d.pass), 10) });
   s.json({ token: tok(u), recovery });
@@ -104,7 +108,7 @@ app.get('/api/data', auth, wrap(async (q, s) => {
   const r = q.u.role, mgr = r !== 'cashier', adm = r === 'admin';
   const L = (m, flt = {}, lim, sort) => { let c = m.find({ ...scope(q), ...flt }).select('-_id'); if (sort) c = c.sort(sort); if (lim) c = c.limit(lim); return c.lean(); };
   const [company, users, branches, cats, prods, sales, expenses, rets, moves, logs, custs, lays, bl] = await Promise.all([
-    Company.findOne({ code: q.u.co }).select('-_id -rh').lean(), User.find({ co: q.u.co }).select('-_id -h').lean(),
+    Company.findOne({ code: q.u.co })  .select('-_id -rh -renc').lean(), User.find({ co: q.u.co }).select('-_id -h').lean(),
     Branch.find(adm ? { co: q.u.co } : { co: q.u.co, id: { $in: q.u.br || [] } }).select('-_id').lean(),
     L(Cat), L(Prod), L(Sale, { ts: { $gte: cut } }, 5000, { ts: -1 }),
     mgr ? L(Expense, { ts: { $gte: cut } }) : [], mgr ? L(Refund, { ts: { $gte: cut } }) : [],
@@ -257,6 +261,13 @@ app.get('/api/serial', auth, wrap(async (q, s) => {   // which receipt did this 
   const rx = sn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   s.json({ docs: await Sale.find({ ...scope(q), 'items.sn': { $regex: rx, $options: 'i' } }).select('-_id').sort({ ts: -1 }).limit(30).lean() });
 }));
+app.get('/api/findsales', auth, wrap(async (q, s) => {   // global search: older receipts by number, customer, item or serial
+  const x = String(q.query.q || '').trim();
+  if (x.length < 2) return s.json({ docs: [] });
+  const rx = x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), or = [{ 'cust.name': { $regex: rx, $options: 'i' } }, { 'cust.phone': { $regex: rx } }, { 'items.name': { $regex: rx, $options: 'i' } }, { 'items.sn': { $regex: rx, $options: 'i' } }];
+  if (/^#?\d+$/.test(x)) or.push({ no: Number(x.replace('#', '')) });
+  s.json({ docs: await Sale.find({ ...scope(q), $or: or }).select('-_id').sort({ ts: -1 }).limit(30).lean() });
+}));
 app.get('/api/lastsold', auth, need('admin', 'manager'), wrap(async (q, s) => {   // when did each product last sell (for the aged stock report)
   const rows = await Sale.aggregate([{ $match: scope(q) }, { $unwind: '$items' }, { $group: { _id: '$items.id', last: { $max: '$ts' } } }]);
   s.json({ last: Object.fromEntries(rows.map(r => [r._id, r.last])) });
@@ -297,7 +308,16 @@ app.post('/api/reset', wrap(async (q, s) => {   // forgot password: company code
   await User.updateOne({ co: code, id: u.id }, { h: await bcrypt.hash(String(d.pass), 10) }); s.json({ ok: 1 });
 }));
 app.post('/api/recovery', auth, need('admin'), wrap(async (q, s) => {
-  const code = rcode(); await Company.updateOne({ code: q.u.co }, { rh: await bcrypt.hash(code, 10) }); s.json({ code });
+  const code = rcode(); await Company.updateOne({ code: q.u.co }, { rh: await bcrypt.hash(code, 10), renc: encCode(code) }); s.json({ code });
+}));
+app.post('/api/recovery/show', auth, need('admin'), wrap(async (q, s) => {   // admin looks at the recovery code again (password required)
+  const key = 'rcv' + q.u.id, t = tries[key] = (tries[key] || []).filter(x => Date.now() - x < 900000);
+  if (t.length >= 5) fail(429, 'Too many attempts. Try again in 15 minutes.');
+  t.push(Date.now());
+  const u = await User.findOne({ co: q.u.co, id: q.u.id });
+  if (!(await bcrypt.compare(String(q.body.pass || ''), u.h))) fail(401, 'That password is wrong.');
+  const c = await Company.findOne({ code: q.u.co }).select('renc').lean(), code = c && c.renc ? decCode(c.renc) : null;
+  s.json(code ? { code } : { none: true });
 }));
 app.post('/api/password', auth, wrap(async (q, s) => {   // change my own password
   const d = q.body, u = await User.findOne({ co: q.u.co, id: q.u.id });

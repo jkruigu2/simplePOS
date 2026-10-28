@@ -88,3 +88,9 @@ Existing companies have no recovery code yet: log in as admin, open Settings and
 - **Deposit and layaway**: in the cart tap **Layaway**, enter the customer, deposit and optional collect-by date. The items are set aside (stock and serials reserved) and a deposit receipt prints. **Settings > Layaway** lists open layaways: add payments, print receipts, **Complete** once paid in full (this becomes the sale, with the original payments) or **Cancel** (admin/manager) with a refund and return to stock.
 - **Aged stock** (admin, manager): **Settings > Aged stock** lists products unsold for 30/60/90/180+ days with the money tied up in them, and exports to CSV.
 - Redeploy BOTH `server.js` and `public/`. Backups now include customers, layaways and the credit ledger.
+
+## Global search, recovery code, search clearing
+- **Search everything**: the 🔍 button at the top right (next to settings) searches products (names, barcodes, serial numbers/IMEIs, custom columns), customers (name, phone), receipts (number, customer, item, serial) and layaways from one box. Add a product to the cart, open a receipt or a customer statement straight from the results. **Search older sales** looks beyond the loaded period.
+- **Recovery code for the admin**: **Settings > Recovery code** asks for the admin password and then shows the code again (with Copy and *Generate a new code*). The code is stored encrypted on the server with a key made from `JWT_SECRET`, so keep `JWT_SECRET` unchanged. Companies created before this version have no viewable code: generate a new one once. Wrong-password attempts are limited.
+- The checkout search box is cleared after a sale, a layaway or a held sale.
+- Redeploy BOTH `server.js` and `public/`.
