@@ -14,7 +14,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 const M = (n, f = {}) => mongoose.model(n, new mongoose.Schema(
   { co: { type: String, index: true }, id: String, ...f }, { strict: false, versionKey: false, id: false }));
 const Company = mongoose.model('Company', new mongoose.Schema(
-  { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String, cur: String, fields: { type: Array, default: [] }, v: { type: Object, default: {} }, rcpt: { type: Object, default: {} }, rh: String, renc: String }, { versionKey: false }));
+  { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String, cur: String, fields: { type: Array, default: [] }, v: { type: Object, default: {} }, rcpt: { type: Object, default: {} }, rh: String, renc: String, sub: { type: Object }, created: Number }, { versionKey: false }));
 const User = M('User', { user: String, name: String, role: String, h: String });
 const Branch = M('Branch', { name: String, loc: String });
 const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund'), Lay = M('Lay'), Ledger = M('Ledger'), Cust = M('Cust');
@@ -43,14 +43,35 @@ async function ensureBranch(co) {   // companies created before branches existed
   for (const Mo of DATA) await Mo.updateMany({ co, br: { $exists: false } }, { $set: { br: 'main' } });
   await User.updateMany({ co, role: { $ne: 'admin' }, br: { $exists: false } }, { $set: { br: ['main'] } });
 }
+// ---------- subscriptions ----------
+const SUBCFG = () => ({ trial: Math.max(0, parseInt(process.env.SUB_TRIAL_DAYS) || 14), grace: Math.max(0, parseInt(process.env.SUB_GRACE_DAYS) || 3) });
+function subInfo(c) {   // active (paid up), grace (just expired: still works, with a warning), expired or suspended (blocked)
+  const g = SUBCFG().grace, s = (c && c.sub) || {};
+  const base = { plan: s.plan || 'legacy', until: s.until || null, grace: g, contact: process.env.OWNER_CONTACT || '', note: s.note || '' };
+  if (s.status === 'suspended') return { ...base, state: 'suspended', days: null };
+  if (!s.until) return { ...base, state: 'active', days: null };   // companies without an end date (older companies) are not blocked
+  const days = Math.ceil((s.until - Date.now()) / 864e5);
+  return { ...base, state: days > 0 ? 'active' : -days < g ? 'grace' : 'expired', days };
+}
+const subCache = {};
+async function subOf(co) {   // remembered for a minute so every request does not hit the database
+  const c = subCache[co];
+  if (c && Date.now() - c.t < 60000) return c.i;
+  const i = subInfo(await Company.findOne({ code: co }).select('sub').lean());
+  subCache[co] = { t: Date.now(), i }; return i;
+}
 async function auth(q, s, n) {
   try {
     const p = jwt.verify((q.headers.authorization || '').slice(7), SECRET);
     const u = await User.findOne({ id: p.uid }).lean();   // role and branches are read fresh on every request
     if (!u) throw 0;
-    q.u = u; n();
+    q.u = u; q.sub = await subOf(u.co);
+    if (!q.noSub && !['active', 'grace'].includes(q.sub.state))
+      return s.status(402).json({ error: q.sub.state === 'suspended' ? 'This account has been suspended.' : 'Your subscription has expired.', code: 'SUB_EXPIRED', sub: q.sub, contact: q.sub.contact });
+    n();
   } catch (e) { s.status(401).json({ error: 'Please log in again' }); }
 }
+const authNoSub = (q, s, n) => { q.noSub = true; return auth(q, s, n); };
 const need = (...r) => (q, s, n) => r.includes(q.u.role) ? n() : s.status(403).json({ error: 'Not allowed for your role' });
 const replaceAll = (Mo, q, a) => Mo.bulkWrite([
   { deleteMany: { filter: { ...scope(q), id: { $nin: a.map(x => x.id) } } } },
@@ -83,11 +104,12 @@ app.get('/api/health', wrap(async (q, s) => {
 
 // ---------- auth ----------
 app.post('/api/register', wrap(async (q, s) => {
+  if (String(process.env.ALLOW_SIGNUP || 'true').toLowerCase() === 'false') fail(403, 'New company registration is closed. Please contact ' + (process.env.OWNER_CONTACT || 'the owner') + '.');
   const d = q.body, code = String(d.code || '').trim().toUpperCase(), user = String(d.user || '').trim().toLowerCase();
   if (!code || !user || !d.name || !d.pass || String(d.pass).length < 4) fail(400, 'Fill in all fields (password min 4 characters).');
   if (await Company.findOne({ code })) fail(409, 'That company code is already in use.');
   const recovery = rcode();
-  await Company.create({ code, name: String(d.name).trim(), loc: d.loc, motto: d.motto, phone: d.phone, rh: await bcrypt.hash(recovery, 10), renc: encCode(recovery) });
+  await Company.create({ code, name: String(d.name).trim(), loc: d.loc, motto: d.motto, phone: d.phone, rh: await bcrypt.hash(recovery, 10), renc: encCode(recovery), created: Date.now(), sub: { plan: 'trial', status: 'active', until: Date.now() + SUBCFG().trial * 864e5 } });
   await newBranch(code, 'Main', '', 'main');
   const u = await User.create({ id: uid(), co: code, user, name: String(d.user).trim(), role: 'admin', br: [], h: await bcrypt.hash(String(d.pass), 10) });
   s.json({ token: tok(u), recovery });
@@ -116,7 +138,7 @@ app.get('/api/data', auth, wrap(async (q, s) => {
     Cust.find({ co: q.u.co }).select('-_id').lean(), L(Lay, { $or: [{ status: 'open' }, { ts: { $gte: cut } }] }), Ledger.aggregate([{ $match: { co: q.u.co } }, { $group: { _id: '$cid', bal: { $sum: '$amt' } } }])]);
   const bals = Object.fromEntries(bl.map(x => [x._id, Math.round(x.bal * 100) / 100]));
   const win = sales.length >= 5000 ? Math.min(...sales.map(x => x.ts)) : cut;
-  s.json({ company, users, branches, cats, prods, sales, expenses, rets, moves, logs, custs, lays, bals, me: q.u.id, v: (company && company.v) || {}, now, win });
+  s.json({ company, users, branches, cats, prods, sales, expenses, rets, moves, logs, custs, lays, bals, subinfo: subInfo(company), me: q.u.id, v: (company && company.v) || {}, now, win });
 }));
 app.get('/api/ver', auth, wrap(async (q, s) => {   // tiny: lets a device check whether anything changed
   const c = await Company.findOne({ code: q.u.co }).select('v -_id').lean(); s.json({ v: (c && c.v) || {} });
@@ -273,6 +295,43 @@ app.get('/api/lastsold', auth, need('admin', 'manager'), wrap(async (q, s) => { 
   s.json({ last: Object.fromEntries(rows.map(r => [r._id, r.last])) });
 }));
 
+// ---------- subscription status (works even when blocked, so the app can explain why) ----------
+app.get('/api/sub', authNoSub, wrap(async (q, s) => { delete subCache[q.u.co]; s.json({ sub: await subOf(q.u.co) }); }));
+
+// ---------- owner console (needs OWNER_KEY): manage which companies have an active subscription ----------
+const ownerTries = {};
+function ownerAuth(q, s, n) {
+  const key = process.env.OWNER_KEY;
+  if (!key) return s.status(404).json({ error: 'The owner console is not enabled. Set OWNER_KEY on the server.' });
+  const t = ownerTries[q.ip] = (ownerTries[q.ip] || []).filter(x => Date.now() - x < 900000);
+  if (t.length >= 10) return s.status(429).json({ error: 'Too many attempts. Try again later.' });
+  const a = Buffer.from(String(q.headers['x-owner-key'] || '')), b = Buffer.from(key);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) { t.push(Date.now()); return s.status(401).json({ error: 'Wrong owner key.' }); }
+  n();
+}
+app.get('/api/owner/companies', ownerAuth, wrap(async (q, s) => {
+  const cs = await Company.find({}).select('-_id code name phone created sub').lean();
+  const uc = await User.aggregate([{ $group: { _id: '$co', n: { $sum: 1 } } }]), m = Object.fromEntries(uc.map(x => [x._id, x.n]));
+  s.json({ trial: SUBCFG().trial, grace: SUBCFG().grace, companies: cs.map(c => ({ code: c.code, name: c.name, phone: c.phone, created: c.created || null, users: m[c.code] || 0, info: subInfo(c) })) });
+}));
+app.post('/api/owner/subscription', ownerAuth, wrap(async (q, s) => {
+  const d = q.body, c = await Company.findOne({ code: String(d.code || '').toUpperCase() }).lean();
+  if (!c) fail(404, 'Company not found.');
+  const cur = c.sub || {}, sub = { ...cur, updated: Date.now() };
+  if (d.until) { const u = Date.parse(String(d.until) + 'T23:59:59Z'); if (!u) fail(400, 'Bad date.'); sub.until = u; }
+  else if (d.addDays) sub.until = Math.max(Date.now(), cur.until || 0) + Math.min(Number(d.addDays) || 0, 3650) * 864e5;
+  if (d.plan) sub.plan = String(d.plan).slice(0, 30);
+  if (d.status) sub.status = d.status === 'suspended' ? 'suspended' : 'active';
+  if (d.note !== undefined) sub.note = String(d.note).slice(0, 200);
+  await Company.updateOne({ code: c.code }, { $set: { sub } }); delete subCache[c.code];
+  s.json({ ok: 1, info: subInfo({ sub }) });
+}));
+app.post('/api/owner/recovery', ownerAuth, wrap(async (q, s) => {   // only the owner can make a new recovery code (for example if JWT_SECRET was changed)
+  const code = rcode(), co = String(q.body.code || '').toUpperCase();
+  if (!(await Company.findOne({ code: co }).lean())) fail(404, 'Company not found.');
+  await Company.updateOne({ code: co }, { rh: await bcrypt.hash(code, 10), renc: encCode(code) }); s.json({ code });
+}));
+
 // ---------- branches (admin only) ----------
 app.post('/api/branches', auth, need('admin'), wrap(async (q, s) => {
   const name = String(q.body.name || '').trim();
@@ -307,17 +366,16 @@ app.post('/api/reset', wrap(async (q, s) => {   // forgot password: company code
   if (String(d.pass || '').length < 4) fail(400, 'Password must be at least 4 characters.');
   await User.updateOne({ co: code, id: u.id }, { h: await bcrypt.hash(String(d.pass), 10) }); s.json({ ok: 1 });
 }));
-app.post('/api/recovery', auth, need('admin'), wrap(async (q, s) => {
-  const code = rcode(); await Company.updateOne({ code: q.u.co }, { rh: await bcrypt.hash(code, 10), renc: encCode(code) }); s.json({ code });
-}));
 app.post('/api/recovery/show', auth, need('admin'), wrap(async (q, s) => {   // admin looks at the recovery code again (password required)
   const key = 'rcv' + q.u.id, t = tries[key] = (tries[key] || []).filter(x => Date.now() - x < 900000);
   if (t.length >= 5) fail(429, 'Too many attempts. Try again in 15 minutes.');
   t.push(Date.now());
   const u = await User.findOne({ co: q.u.co, id: q.u.id });
   if (!(await bcrypt.compare(String(q.body.pass || ''), u.h))) fail(401, 'That password is wrong.');
-  const c = await Company.findOne({ code: q.u.co }).select('renc').lean(), code = c && c.renc ? decCode(c.renc) : null;
-  s.json(code ? { code } : { none: true });
+  const c = await Company.findOne({ code: q.u.co }).select('renc').lean();
+  let code = c && c.renc ? decCode(c.renc) : null, created = false;
+  if (!code) { code = rcode(); created = true; await Company.updateOne({ code: q.u.co }, { rh: await bcrypt.hash(code, 10), renc: encCode(code) }); }   // older companies get their first viewable code here
+  s.json({ code, created });
 }));
 app.post('/api/password', auth, wrap(async (q, s) => {   // change my own password
   const d = q.body, u = await User.findOne({ co: q.u.co, id: q.u.id });

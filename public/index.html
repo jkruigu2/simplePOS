@@ -93,6 +93,7 @@ tr.exm td{opacity:.5}
 .vb{display:flex;align-items:flex-end;gap:2px;height:130px;margin-bottom:6px}.vb>div{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%}.vb i{width:100%;background:var(--pri);border-radius:3px 3px 0 0;min-height:1px}.vb small{font-size:9px;color:var(--mut)}
 .brandbox{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 14px;margin:0 auto 14px;max-width:300px}.brand{display:block;width:100%;height:auto}
 .gh{font-size:13px;font-weight:600;color:var(--mut);margin:14px 0 2px}.gr{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--bd)}.gr:last-child{border-bottom:0}.gr small{display:block}
+.sbar{background:var(--soft);border:1px solid var(--bd);border-radius:10px;padding:8px 12px;margin:0 0 12px;font-size:14px}.sbar.bad{background:rgba(192,57,43,.12);border-color:var(--bad);color:var(--bad)}
 .lock{position:fixed;inset:0;background:var(--bg);display:grid;place-items:center;padding:16px;z-index:300}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 @page{margin:2mm}
@@ -108,16 +109,17 @@ let token='';try{token=localStorage.getItem('pos3_token')||''}catch(e){}
 const APPEND=['/api/sales','/api/moves','/api/logs','/api/rets','/api/ledger'],UPS=['/api/lays','/api/custs'];
 const pend=()=>load('pos3_q',[]).length;
 const pill=()=>navigator.onLine&&!pend()?'':`<span class="badge" style="background:var(--warn);color:#fff">${navigator.onLine?'Syncing '+pend():'Offline'+(pend()?' · '+pend()+' waiting':'')}</span>`;
-function cacheState(){try{localStorage.setItem('pos3_cache',JSON.stringify({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs,lays,bals,session}))}catch(e){}}
+function cacheState(){try{localStorage.setItem('pos3_cache',JSON.stringify({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs,lays,bals,subinfo,session}))}catch(e){}}
 async function raw(m,p,b){let r;try{r=await fetch((window.POS_API||'')+p,{method:m,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:b?JSON.stringify(b):undefined})}catch(x){const e=new Error('You are offline - connect to the internet and try again');e.net=true;throw e}
-  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||(r.status===404||r.status===405?'Server is missing this feature - deploy the latest server.js':'Request failed ('+r.status+')'));return j}
+  const j=await r.json().catch(()=>({}));if(r.status===402&&j.code==='SUB_EXPIRED'){subBlock={sub:j.sub||{},contact:j.contact||''};const e=new Error(j.error||'Subscription expired');e.sub=true;setTimeout(render,0);throw e}
+  if(!r.ok)throw new Error(j.error||(r.status===404||r.status===405?'Server is missing this feature - deploy the latest server.js':'Request failed ('+r.status+')'));return j}
 function enqueue(m,p,b){let q=load('pos3_q',[]);
   if(APPEND.includes(p)){const e=q.find(x=>x.p===p);if(e){const ids=new Set(e.b.map(x=>x.id));b.forEach(x=>{if(!ids.has(x.id))e.b.push(x)})}else q.push({m,p,b:[...b]})}
   else if(UPS.includes(p)){const e=q.find(x=>x.p===p);if(e)b.forEach(x=>{const i=e.b.findIndex(y=>y.id===x.id);if(i<0)e.b.push(x);else e.b[i]=x});else q.push({m,p,b:[...b]})}
   else{q=q.filter(x=>x.p!==p);q.push({m,p,b})}
   try{localStorage.setItem('pos3_q',JSON.stringify(q))}catch(e){}}
 async function flushQ(){let q=load('pos3_q',[]);
-  while(q.length){const e=q[0];try{await raw(e.m,e.p,e.b)}catch(x){if(x.net)return false;toast(x.message,'err')}q.shift();try{localStorage.setItem('pos3_q',JSON.stringify(q))}catch(x){}}return true}
+  while(q.length){const e=q[0];try{await raw(e.m,e.p,e.b)}catch(x){if(x.net||x.sub)return false;toast(x.message,'err')}q.shift();try{localStorage.setItem('pos3_q',JSON.stringify(q))}catch(x){}}return true}
 let nb=0;
 function busy(on,m){nb=Math.max(0,nb+(on?1:-1));let e=document.getElementById('ld');
   if(nb>0&&!e){e=document.createElement('div');e.id='ld';e.className='ld';e.innerHTML='<div class="spin"></div><div id="ldt"></div>';document.body.appendChild(e)}
@@ -125,20 +127,20 @@ function busy(on,m){nb=Math.max(0,nb+(on?1:-1));let e=document.getElementById('l
   if(nb===0&&e)e.remove()}
 async function api(m,p,b,quiet,queue){if(!quiet)busy(true,m);
   try{if(queue&&!navigator.onLine){enqueue(m,p,b);return{queued:1}}
-    try{return await raw(m,p,b)}catch(e){if(e.net&&queue){enqueue(m,p,b);return{queued:1}}throw e}}
+    try{return await raw(m,p,b)}catch(e){if((e.net||e.sub)&&queue){enqueue(m,p,b);return{queued:1}}throw e}}
   finally{if(!quiet)busy(false)}}
 const ROUTE={[K.g]:'cats',[K.p]:'prods',[K.l]:'sales',[K.e]:'expenses'};
 const save=(k,v)=>{if(ROUTE[k]){api('PUT','/api/'+ROUTE[k],k===K.l?v.slice(-1):v,false,true).catch(e=>toast(e.message,'err'));cacheState()}else try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
 async function boot(q){
   await flushQ();
-  if(pend()){if(!cats.length&&!prods.length){const c=load('pos3_cache',null);if(c)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs=[],lays=[],bals={},session}=c)}return}
+  if(pend()){if(!cats.length&&!prods.length){const c=load('pos3_cache',null);if(c)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs=[],lays=[],bals={},subinfo=null,session}=c)}return}
   try{const r=await api('GET','/api/data?days=35',null,q);
     const wn=r.win||0,keep=(a,w)=>loadedFrom!==null&&loadedFrom<w?a.filter(x=>x.ts<w):[];   // older records loaded earlier are kept (no window = everything was sent)
     const oS=keep(sales,wn),oR=keep(rets,wn),oE=keep(expenses,wn);
-    cos=[r.company];users=r.users;cats=r.cats;prods=r.prods;branches=r.branches||[];custs=r.custs||[];lays=r.lays||[];bals=r.bals||{};moves=r.moves||[];logs=r.logs||[];session=r.me;
+    cos=[r.company];users=r.users;cats=r.cats;prods=r.prods;branches=r.branches||[];custs=r.custs||[];lays=r.lays||[];bals=r.bals||{};subinfo=r.subinfo||null;moves=r.moves||[];logs=r.logs||[];session=r.me;
     sales=[...r.sales,...oS];rets=[...(r.rets||[]),...oR];expenses=[...(r.expenses||[]),...oE];
     loadedFrom=loadedFrom===null?wn:Math.min(loadedFrom,wn);ver=r.v||{};['sales','moves','logs','rets','lays','custs'].forEach(k=>syncAt[k]=r.now);cacheState()}
-  catch(e){const c=load('pos3_cache',null);if(e.net&&c&&token)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs=[],lays=[],bals={},session}=c);else throw e}}
+  catch(e){const c=load('pos3_cache',null);if(e.net&&c&&token)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs=[],lays=[],bals={},subinfo=null,session}=c);else throw e}}
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const CUR=()=>{try{return (C&&C.cur)||'$'}catch(e){return '$'}};
 const nf=n=>(Number(n)||0).toLocaleString('en-US');
@@ -153,7 +155,7 @@ function toast(m,type){type=type||(/not |cannot|fail|invalid|only |less than|exi
 
 const PERM={admin:['sell','products','stock','report','users','expenses','history','lowstock','stockrep','prices','aged','customers','layaway','serials','audit','backup','branches'],manager:['sell','products','stock','report','expenses','history','lowstock','stockrep','prices','aged','customers','layaway','serials'],cashier:['sell','stock','lowstock','customers','layaway','serials']};
 const TABS={sell:'Sell',products:'Products',stock:'Stock',report:'Reports',users:'Users',expenses:'Expenses',history:'Stock history',lowstock:'Low stock',stockrep:'Stock report',audit:'Audit log',backup:'Backup & export',branches:'Branches',prices:'Price history',aged:'Aged stock',customers:'Customers',layaway:'Layaway',serials:'Serial lookup'};
-let cos=[],users=[],cats=[],prods=[],sales=[],expenses=[],moves=[],logs=[],rets=[],recovery='',branches=[],curBr='',imp=null,rtab='overview',phSel='',ver={},syncAt={},loadedFrom=null,monthlyC={},rangeBusy=false,rdraft=null,custs=[],lays=[],ledger=[],bals={},serq='',gq='',serRes=null,lastSoldC=null,agedN=load('pos3_aged',60);
+let cos=[],users=[],cats=[],prods=[],sales=[],expenses=[],moves=[],logs=[],rets=[],recovery='',branches=[],curBr='',imp=null,rtab='overview',phSel='',ver={},syncAt={},loadedFrom=null,monthlyC={},rangeBusy=false,rdraft=null,custs=[],lays=[],ledger=[],bals={},serq='',gq='',subBlock=null,subinfo=null,serRes=null,lastSoldC=null,agedN=load('pos3_aged',60);
 let session=null,mode='login',err='',tab='sell',cart=[],filt='',from='',to='',wk=0,rc=null,U=null,C=null,q='',pg={},ps=load('pos3_ps',10),md=null,mdx=null,disc={on:false,type:'%',val:''},pays=[{m:'Cash',amt:'',ref:''}],pay='Cash',paid='',cust={name:'',phone:'',note:''};
 const mine=a=>a.filter(x=>x.co===C.code);
 const cmine=mine;
@@ -348,6 +350,15 @@ function gsearch(q){const tk=q.toLowerCase().trim().split(/\s+/).filter(Boolean)
     layR:bmine(lays).filter(l=>m(('lay-'+l.no+' '+l.cust.name+' '+l.cust.phone+' '+l.items.map(i=>i.name+' '+(i.sn||'')).join(' ')).toLowerCase())).slice(0,6)}}
 async function findOlder(){const q=gq.trim();if(q.length<2)return;if(!token||!navigator.onLine)return toast('Searching older sales needs internet','warn');
   try{const r=await api('GET','/api/findsales?q='+encodeURIComponent(q),null,true),ids=new Set(sales.map(x=>x.id));let n=0;r.docs.forEach(x=>{if(!ids.has(x.id)){sales.push(x);n++}});toast(n?'Found '+n+' older receipt'+(n===1?'':'s'):'No older receipts matched');render()}catch(e){toast(e.message,'err')}}
+const subCalc=i=>{if(!i||!i.until)return null;const d=Math.ceil((i.until-Date.now())/864e5);return{d,state:d>0?'active':(-d)<(i.grace||0)?'grace':'expired'}};
+const offlineExpired=()=>{const c=subCalc(subinfo);return !!(c&&c.state==='expired'&&!navigator.onLine)};
+function subBanner(){const i=subinfo,c=subCalc(i);if(!c)return '';const ct=i.contact?' Contact '+esc(i.contact)+'.':'';
+  if(c.state==='grace')return `<div class="sbar bad">Your subscription ended ${-c.d<1?'today':(-c.d)+' day'+(-c.d===1?'':'s')+' ago'}. Renew now to avoid being locked out.${ct}</div>`;
+  if(c.state==='active'&&c.d<=7&&can('users'))return `<div class="sbar">Your subscription ends in ${c.d} day${c.d===1?'':'s'} (${new Date(i.until).toLocaleDateString()}).${ct}</div>`;return ''}
+function subBlockView(){const off=!subBlock,i=(subBlock&&subBlock.sub)||subinfo||{},ct=(subBlock&&subBlock.contact)||i.contact||'',sus=i.state==='suspended';
+  return `<div class="card auth"><div class="brandbox"><img class="brand" src="/logo.png" alt="" onerror="this.parentNode.remove()"></div><h2 style="text-align:center">${off?'Connect to verify your subscription':sus?'Account suspended':'Subscription expired'}</h2>
+  <p style="text-align:center">${off?'Your subscription end date has passed and this device is offline. Connect to the internet so it can be checked.':sus?'This account has been suspended.':'Your subscription ended'+(i.until?' on '+new Date(i.until).toLocaleDateString():'')+'. Renew it to keep using the POS.'}${ct?'<br>Contact: <b>'+esc(ct)+'</b>':''}</p><p class="mut" style="text-align:center">Your data is safe and will be here when the subscription is active again.</p><div class="row"><button data-act="subcheck">Check again</button><button data-act="logout">Log out</button></div></div>`}
+async function subRecheck(){try{const r=await api('GET','/api/sub');if(['active','grace'].includes(r.sub.state)){subBlock=null;subinfo=r.sub;await boot();toast('Your subscription is active');render()}else{subBlock={sub:r.sub,contact:r.sub.contact||''};toast('The subscription is still not active','warn');render()}}catch(e){if(!e.sub)toast(e.message,'err')}}
 const EXC=['Rent','Transport','Salaries','Utilities','Supplies','Marketing','Other'];
 const PWF=n=>`<div class="pw"><input name="${n}" type="${showpw?'text':'password'}" data-pw minlength="4" required><button type="button" data-act="showpw" aria-label="Show or hide password">${showpw?EYEOFF:EYE}</button></div>`;
 const rfOf=id=>bmine(rets).filter(x=>x.sid===id).reduce((a,e)=>a+e.amt,0);
@@ -385,6 +396,7 @@ function ask(msg,fn,rr){const d=document.createElement('div');d.className='cfm';
 let theme=load('pos2_theme','auto'),dr=false,mq='',showpw=false,lk=false,needUnlock=true,lastAct=Date.now(),lowN=load('pos3_lown',5),yr=new Date().getFullYear();
 const applyTheme=()=>{const r=document.documentElement;if(theme==='auto')r.removeAttribute('data-theme');else r.dataset.theme=theme};
 function render(){
+  if(subBlock||offlineExpired()){$('#app').innerHTML=subBlockView();return}
   U=users.find(x=>x.id===session);C=U&&cos.find(c=>c.code===U.co);
   if(!U||!C){U=C=null;$('#app').innerHTML=authView();return}
   if(needUnlock){needUnlock=false;if(lockCfg())lk=true}
@@ -404,7 +416,7 @@ function authView(){
 }
 function shell(){
   const main=['sell','report'].filter(can),tabs=main.includes(tab)?main:[...main,tab];
-  return `<nav><div class="tabs">${tabs.map(t=>`<button class="${tab===t?'act':''}" data-act="tab" data-id="${t}">${TABS[t]}</button>`).join('')}</div><button class="gear" data-act="open" data-id="gsearch" aria-label="Search everything">🔍</button><button class="gear" data-act="drawer" aria-label="Settings">⚙️</button></nav>
+  return `<nav><div class="tabs">${tabs.map(t=>`<button class="${tab===t?'act':''}" data-act="tab" data-id="${t}">${TABS[t]}</button>`).join('')}</div><button class="gear" data-act="open" data-id="gsearch" aria-label="Search everything">🔍</button><button class="gear" data-act="drawer" aria-label="Settings">⚙️</button></nav>${subBanner()}
   ${(curBr==='all'&&BONLY.includes(tab))?branchNotice():{sell:sellView,products:prodView,stock:stockView,report:reportView,users:userView,expenses:expensesView,history:historyView,lowstock:lowView,stockrep:stockRepView,audit:auditView,backup:backupView,branches:branchesView,prices:pricesView,aged:agedView,customers:custView,layaway:layView,serials:serialsView}[tab]()}
   <footer class="bar"><div><b><img src="/icon-192.png" alt="" style="width:20px;height:20px;border-radius:5px;vertical-align:-4px;margin-right:6px;background:#fff" onerror="this.remove()">${esc(C.name)}</b><br><small class="mut">${esc(U.name)} · ${curBr==='all'?'All branches':esc(brName(curBr))}</small><span class="badge">${U.role}</span>${pill()}</div></footer>`;
 }
@@ -496,7 +508,7 @@ function drawerView(){
   ${allowedBr().length>1?`<div class="dh">Branch</div>${[...allowedBr().map(i=>[i,brName(i)]),['all','All branches (reports)']].map(([i,n])=>`<button class="ditem ${curBr===i?'act':''}" data-act="setbr" data-id="${i}"><span>🏬</span>${esc(n)}</button>`).join('')}`:''}${items.length?`<div class="dh">Manage</div>${items.map(x=>`<button class="ditem" data-act="tab" data-id="${x[0]}"><span>${x[1]}</span>${x[2]}</button>`).join('')}`:''}
   <div class="dh">Quick add</div>${qa.map(x=>`<button class="ditem" data-act="open" data-id="${x[0]}" ${off(x)?'disabled':''}><span>${x[1]}</span>${x[2]}</button>`).join('')}
   <div class="dh">Appearance</div><div class="row" style="gap:6px">${['auto','light','dark'].map(m=>`<button class="${theme===m?'act':''}" style="flex:1" data-act="theme" data-id="${m}">${m}</button>`).join('')}</div>
-  ${can('users')?`<div class="dh">Company</div><button class="ditem" data-act="open" data-id="cur"><span>💱</span>Currency (${esc(CUR())})</button><button class="ditem" data-act="open" data-id="rdesign"><span>🧾</span>Receipt design</button>`:''}<div class="dh">Security</div><button class="ditem" data-act="open" data-id="pin"><span>🔒</span>${lockCfg()?'Change PIN':'Set PIN lock'}</button>${lockCfg()?`<button class="ditem" data-act="lockn"><span>🔐</span>Lock now</button><button class="ditem del" data-act="rmpin"><span>✕</span>Remove PIN</button>`:''}
+  ${can('users')?`<div class="dh">Company</div><button class="ditem" data-act="open" data-id="cur"><span>💱</span>Currency (${esc(CUR())})</button><button class="ditem" data-act="open" data-id="rdesign"><span>🧾</span>Receipt design</button>${subinfo?`<div class="dcard" style="margin-top:6px"><b>Subscription</b><br><small class="mut">${esc(subinfo.plan==='trial'?'Free trial':subinfo.plan==='legacy'?'Plan':subinfo.plan)} · ${subinfo.until?(subCalc(subinfo).state==='active'?'active until '+new Date(subinfo.until).toLocaleDateString()+' ('+subCalc(subinfo).d+' days left)':'ended '+new Date(subinfo.until).toLocaleDateString()):'no end date'}</small></div>`:''}`:''}<div class="dh">Security</div><button class="ditem" data-act="open" data-id="pin"><span>🔒</span>${lockCfg()?'Change PIN':'Set PIN lock'}</button>${lockCfg()?`<button class="ditem" data-act="lockn"><span>🔐</span>Lock now</button><button class="ditem del" data-act="rmpin"><span>✕</span>Remove PIN</button>`:''}
   <div class="dh">Account</div><button class="ditem" data-act="open" data-id="mypw"><span>🔑</span>Change my password</button>${can('users')?'<button class="ditem" data-act="open" data-id="recview"><span>🛟</span>Recovery code</button>':''}<button class="ditem del" data-act="logout"><span>🚪</span>Logout</button></aside></div>`;
 }
 function pager(key,n){return {a:0,b:1e9,html:''}}
@@ -581,7 +593,7 @@ function mdView(){
     <label style="margin-top:10px;display:block">Refund method</label><select name="meth">${PAY.filter(m=>m[0]!=='Credit').map(m=>`<option>${m[0]}</option>`).join('')}${sl.cid?'<option>On account</option>':''}</select><label>Reason</label><input name="why" placeholder="Optional"><label style="display:flex;gap:8px;align-items:center;color:var(--tx)"><input type="checkbox" name="restock" checked style="width:auto;margin:0"> Return items to stock</label><div class="err">${esc(err)}</div><div class="row"><button type="button" data-act="closem">Cancel</button><button class="pri">Refund</button></div></form></div></div>`}
   if(md==='held'){const h=getHeld();
     return `<div class="modal"><div class="card" style="width:100%;max-width:520px"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Held sales (${h.length})</h2><button data-act="closem">✕</button></div>${h.length?`<div class="tblw"><table><tr><th>Label</th><th>Held at</th><th class="r">Items</th><th class="r">Total</th><th></th></tr>${h.map(x=>`<tr><td>${esc(x.label)}</td><td data-v="${x.ts}">${new Date(x.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</td><td class="r">${x.cart.reduce((a,c)=>a+c.qty,0)}</td><td class="r">${money(x.total)}</td><td class="r" style="white-space:nowrap"><button class="pri" data-act="resume" data-id="${x.id}">Resume</button> <button class="del" data-act="delheld" data-id="${x.id}">Delete</button></td></tr>`).join('')}</table></div>`:'<p class="mut">No sales on hold.</p>'}</div></div>`}
-  if(md==='rec'){return `<div class="modal"><div class="card" style="width:100%;max-width:420px"><h2>Recovery code</h2><p>Write this code down and keep it safe. It is the only way to reset a forgotten password, and it is shown only once.</p><div class="card" style="text-align:center;font-size:24px;font-weight:600;letter-spacing:.08em;background:var(--soft)">${esc(recovery)}</div><div class="row"><button data-act="reccopy">Copy</button><button class="pri" data-act="recdone">I have saved it</button></div><button data-act="recov" style="width:100%;margin-top:8px">Generate a new code</button><small class="mut" style="display:block;margin-top:6px">A new code makes the old one stop working.</small></div></div>`}
+  if(md==='rec'){return `<div class="modal"><div class="card" style="width:100%;max-width:420px"><h2>Recovery code</h2><p>Write this code down and keep it safe. It is the only way to reset a forgotten password, and it is shown only once.</p><div class="card" style="text-align:center;font-size:24px;font-weight:600;letter-spacing:.08em;background:var(--soft)">${esc(recovery)}</div><div class="row"><button data-act="reccopy">Copy</button><button class="pri" data-act="recdone">I have saved it</button></div></div></div>`}
   if(md==='rdesign'){const o=rdraft||RC(),op=(a,v)=>a.map(([x,l])=>`<option value="${x}" ${v===x?'selected':''}>${l}</option>`).join(''),ck=(k,l)=>`<label class="chk"><input type="checkbox" data-input="rd" data-k="${k}" ${o[k]?'checked':''}> ${l}</label>`;
     return `<div class="modal"><div class="card" style="width:100%;max-width:560px"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Receipt design</h2><button data-act="closem">✕</button></div>
     <form data-form="rdesign"><label>Logo</label><div class="row" style="justify-content:flex-start;gap:10px;margin-bottom:8px">${o.logo?`<img src="${rlogo(o)}" alt="" style="height:44px;border:1px solid var(--bd);border-radius:6px;background:#fff">`:''}<input type="file" accept="image/*" data-change="rlogo" style="flex:1;margin:0">${o.logo==='builtin'?'':'<button type="button" data-act="rlogodef">Use built-in logo</button>'}${o.logo?'<button type="button" data-act="rlogoclear">Remove</button>':''}</div>
@@ -602,7 +614,6 @@ function mdView(){
       grp('Receipts',R.recR,x=>`<div class="gr"><div><b>#${x.no}</b> · ${money(x.total)}<small class="mut">${new Date(x.ts).toLocaleDateString()}${x.cust&&x.cust.name?' · '+esc(x.cust.name):''} · ${esc(x.items.map(i=>i.name+(i.sn?' ['+i.sn+']':'')).join(', ')).slice(0,90)}</small></div><button data-act="rcpt" data-id="${x.id}">Receipt</button></div>`)+
       grp('Layaways',R.layR,l=>`<div class="gr"><div><b>LAY-${l.no}</b> · ${esc(l.cust.name)}<small class="mut">${l.status==='open'?'Open · balance '+money(layBal(l)):l.status==='done'?'Completed':'Cancelled'}</small></div><button data-act="open" data-id="lrcpt" data-x="${l.id}">Receipt</button></div>`)})()}
     ${R?'<div class="row" style="margin-top:12px;justify-content:flex-start"><button data-act="findolder">Search older sales</button><small class="mut">Receipts older than the loaded period</small></div>':''}</div></div>`}
-  if(md==='recnone'){return `<div class="modal"><div class="card" style="width:100%;max-width:420px"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Recovery code</h2><button data-act="closem">✕</button></div><p>No recovery code can be shown yet, because it was created before codes could be viewed. Generate a new one now. The old code will stop working.</p><div class="row"><button data-act="closem">Cancel</button><button class="pri" data-act="recov">Generate new code</button></div></div></div>`}
   if(md==='pickser'){const p=prods.find(x=>x.id===mdx);if(!p)return '';const w=mq.trim().toLowerCase(),L=(p.sns||[]).filter(sn=>!cart.some(c=>c.sn===sn)&&sn.toLowerCase().includes(w));
     return `<div class="modal"><div class="card" style="width:100%;max-width:480px"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">${esc(dn(p))}</h2><button data-act="closem">✕</button></div><p class="mut" style="margin-top:0">Choose the unit being sold (${nf((p.sns||[]).length)} in stock). You can also scan its IMEI or serial barcode.</p><div class="row" style="margin-bottom:8px"><input id="mq" data-input="mq" type="search" placeholder="Search serial / IMEI…" value="${esc(mq)}" style="flex:1;margin:0"><button data-act="scan" aria-label="Scan">${CAM}</button></div>${L.length?`<div class="tblw"><table class="nt"><tr><th>Serial / IMEI</th><th></th></tr>${L.slice(0,100).map(sn=>`<tr><td>${esc(sn)}</td><td class="r"><button class="pri" data-act="addsn" data-id="${p.id}" data-sn="${esc(sn)}">Add</button></td></tr>`).join('')}</table></div>`:'<p class="mut">No matching units.</p>'}</div></div>`}
   if(md==='lrcpt'){const l=lays.find(x=>x.id===mdx);if(!l)return '';const o=RC();return `<div class="modal"><div><div class="card receipt ${rcClass(o)}">${layBody(l,o)}</div><div class="row noprint"><button data-act="closem">Close</button><button class="pri" data-act="print">🖨 Print</button></div></div></div>`}
@@ -695,7 +706,7 @@ document.addEventListener('submit',async e=>{
   if(k==='laycx'&&can('report')){const l=lays.find(x=>x.id===mdx);if(!l)return;const amt=Math.min(Math.max(0,+d.amt||0),layPaid(l));
     return ask('Cancel LAY-'+l.no+' and refund '+money(amt)+'?',()=>{if(d.restock){const ms=[];l.items.forEach(i=>{const p=prods.find(x=>x.id===i.id);if(p){p.stock+=i.qty;if(i.sn)p.sns=[...(p.sns||[]),i.sn];ms.push(mv(p,i.qty,'return','LAY-'+l.no+' cancelled',i.sn||''))}});save(K.p,prods);if(ms.length)rec('moves',ms)}
       l.status='cancelled';l.refunded=amt;l.method=d.meth;l.cxAt=Date.now();upsert('lays',[l]);audit('Layaway cancelled','LAY-'+l.no+' · refunded '+money(amt)+' of '+money(layPaid(l)));md=null;toast('Layaway cancelled')})}
-  if(k==='recview'&&can('users')){try{const r=await api('POST','/api/recovery/show',{pass:d.pass});if(r.code){recovery=r.code;audit('Recovery code viewed','');md='rec'}else md='recnone'}catch(x){err=x.message}return render()}
+  if(k==='recview'&&can('users')){try{const r=await api('POST','/api/recovery/show',{pass:d.pass});recovery=r.code;audit('Recovery code viewed','');md='rec';if(r.created)toast('A recovery code was created for you. Save it now.','warn')}catch(x){err=x.message}return render()}
   if(k==='br'&&can('branches')){const n=(d.name||'').trim();if(!n)return toast('Enter a branch name','warn');const b=branches.find(x=>x.id===mdx);
     return ask((b?'Save changes to ':'Create branch ')+'"'+n+'"?',async()=>{if(b){await api('PATCH','/api/branches/'+b.id,{name:n,loc:d.loc});b.name=n;b.loc=(d.loc||'').trim();audit('Branch edited',n)}else{const nb=await api('POST','/api/branches',{name:n,loc:d.loc});branches.push(nb);audit('Branch created',n)}md=null;toast('Branch saved')})}
   if(k==='ubr'&&can('users')){const u=users.find(x=>x.id===mdx),brs=branches.filter(b=>d['br_'+b.id]).map(b=>b.id);if(!u)return;if(!brs.length)return toast('Choose at least one branch','warn');
@@ -783,7 +794,6 @@ document.addEventListener('click',e=>{
   if(a==='restore'){const f=$('#rf')&&$('#rf').files[0];if(!f)return toast('Choose a backup file first','warn');
     f.text().then(txt=>{let d;try{d=JSON.parse(txt)}catch(x){return toast('That file is not a valid backup','err')}if(d.v!==1||!Array.isArray(d.prods))return toast('That file is not a POS backup','err');
       ask('Restore backup from '+(d.at?d.at.slice(0,10):'file')+'? This REPLACES all current data for this company.',async()=>{await api('POST','/api/restore',d);await boot();audit('Backup restored','from '+(d.at||'file'));toast('Backup restored')})});return}
-  if(a==='recov')return ask('Generate a new recovery code? The old one will stop working.',async()=>{const r=await api('POST','/api/recovery');recovery=r.code;md='rec';dr=false});
   if(a==='yr')yr=Math.min(new Date().getFullYear(),yr+ +id);
   if(a==='setbr'){const go=()=>{curBr=id;save('pos3_br_'+U.id,id);if(id==='all'&&BONLY.includes(tab))tab='report';dr=false;cart=[];toast('Branch: '+(id==='all'?'All branches':brName(id)))};
     if(id===curBr){dr=false}else if(cart.length)return ask('Switching branch clears the current cart. Continue?',go);else go()}
@@ -814,8 +824,9 @@ document.addEventListener('click',e=>{
   if(a==='recdone'){md=null;recovery=''}
   if(a==='showpw'){showpw=!showpw;document.querySelectorAll('input[data-pw]').forEach(i=>i.type=showpw?'text':'password');document.querySelectorAll('[data-act=showpw]').forEach(x=>x.innerHTML=showpw?EYEOFF:EYE);return}
   if(a==='print')return window.print();
-  if(!U&&a!=='mode'&&a!=='mode2')return;
-  if(a==='logout')return ask('Log out now?',()=>{dr=false;lk=false;session=null;cart=[];rc=null;try{localStorage.removeItem('pos3_token');token='';cos=[];users=[];cats=[];prods=[];sales=[]}catch(x){}});
+  if(!U&&a!=='mode'&&a!=='mode2'&&a!=='subcheck'&&a!=='logout')return;
+  if(a==='subcheck')return subRecheck();
+  if(a==='logout')return ask('Log out now?',()=>{dr=false;lk=false;subBlock=null;subinfo=null;session=null;cart=[];rc=null;try{localStorage.removeItem('pos3_token');token='';cos=[];users=[];cats=[];prods=[];sales=[]}catch(x){}});
   if(a==='filt'){filt=id;pg.sell=1}
   if(a==='addpay'){const u=pays.map(p=>p.m),n=PAY.map(m=>m[0]).find(m=>!u.includes(m))||'Cash';pays.push({m:n,amt:'',ref:''})}
   if(a==='lockn'){if(!lockCfg())return toast('Set a PIN first','warn');lk=true;dr=false}
@@ -887,7 +898,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='sq'){
   if(e.key==='Enter'&&e.target.id==='qn'){e.preventDefault();const b=document.querySelector('[data-act=qadd]');if(b)b.click()}});
 applyTheme();
 render();
-if(token)boot().then(render).catch(e=>{if(!e.net){token='';try{localStorage.removeItem('pos3_token')}catch(x){}}render()});
+if(token)boot().then(render).catch(e=>{if(e.sub)return render();if(!e.net){token='';try{localStorage.removeItem('pos3_token')}catch(x){}}render()});
 window.addEventListener('online',()=>{if(token)boot(true).then(render).catch(()=>render())});window.addEventListener('offline',()=>render());
 setInterval(()=>{if(token&&pend()&&navigator.onLine)flushQ().then(()=>render())},20000);
 if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
