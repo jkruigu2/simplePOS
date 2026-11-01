@@ -3,6 +3,7 @@ require('dotenv').config();
 if (process.env.DNS_SERVERS) require('dns').setServers(process.env.DNS_SERVERS.split(',').map(x => x.trim()));
 const express = require('express'), mongoose = require('mongoose'), bcrypt = require('bcryptjs'),
       jwt = require('jsonwebtoken'), path = require('path'), crypto = require('crypto');
+const T = require('./lib/transfer');
 const SECRET = process.env.JWT_SECRET;
 
 const app = express();
@@ -17,7 +18,7 @@ const Company = mongoose.model('Company', new mongoose.Schema(
   { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String, cur: String, fields: { type: Array, default: [] }, v: { type: Object, default: {} }, rcpt: { type: Object, default: {} }, rh: String, renc: String, sub: { type: Object }, created: Number }, { versionKey: false }));
 const User = M('User', { user: String, name: String, role: String, h: String });
 const Branch = M('Branch', { name: String, loc: String });
-const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund'), Lay = M('Lay'), Ledger = M('Ledger'), Cust = M('Cust');
+const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund'), Lay = M('Lay'), Ledger = M('Ledger'), Cust = M('Cust'), Trf = M('Trf');
 const DATA = [Cat, Prod, Sale, Expense, Move, Log, Refund, Lay, Ledger];   // everything that belongs to one branch (has a `br` field)
 
 // ---------- helpers ----------
@@ -34,6 +35,8 @@ const tok = u => jwt.sign({ uid: u.id }, SECRET, { expiresIn: '7d' });
 const pub = u => ({ id: u.id, co: u.co, user: u.user, name: u.name, role: u.role, br: u.br || [] });
 // Branch access: admins see every branch; managers and cashiers only the branches assigned to them.
 const scope = q => q.u.role === 'admin' ? { co: q.u.co } : { co: q.u.co, br: { $in: q.u.br || [] } };
+// Transfers are visible to people at the sending branch and at the receiving branch.
+const tScope = q => q.u.role === 'admin' ? { co: q.u.co } : { co: q.u.co, $or: [{ from: { $in: q.u.br || [] } }, { to: { $in: q.u.br || [] } }] };
 const okBr = (q, b) => !!b && (q.u.role === 'admin' || (q.u.br || []).includes(b));
 const clean = (a, q) => { if (!Array.isArray(a) || a.length > 20000) fail(400, 'Bad data'); return a.filter(x => x && x.id && okBr(q, x.br)).map(x => ({ ...x, co: q.u.co })); };
 const newBranch = async (co, name, loc = '', id = uid()) => { await Branch.updateOne({ co, id }, { $setOnInsert: { co, id, name, loc } }, { upsert: true }); return { id, co, name, loc }; };
@@ -87,6 +90,7 @@ app.use('/api', (q, s, n) => {
       let ks = [];
       if (m === 'PUT' && VKEY[p]) ks = [VKEY[p]];
       else if (p.startsWith('/api/sales/')) ks = ['salesx'];
+      else if (p.startsWith('/api/transfers')) ks = ['prods', 'cats', 'trf', 'moves'];
       else if (p === '/api/restore') ks = ['org', 'salesx', 'prods', 'cats', 'expenses', 'moves', 'logs', 'rets', 'custs', 'lays', 'ledger'];
       else if (p !== '/api/recovery/show' && /^\/api\/(users|branches|company|password|recovery)/.test(p)) ks = ['org'];
       if (ks.length) Company.updateOne({ code: q.u.co }, { $inc: Object.fromEntries(ks.map(k => ['v.' + k, 1])) }).catch(() => {});
@@ -129,16 +133,17 @@ app.get('/api/data', auth, wrap(async (q, s) => {
   const days = Math.min(Math.max(parseInt(q.query.days) || 35, 1), 3650), cut = now - days * 864e5;   // only recent sales are sent; older ones load on request
   const r = q.u.role, mgr = r !== 'cashier', adm = r === 'admin';
   const L = (m, flt = {}, lim, sort) => { let c = m.find({ ...scope(q), ...flt }).select('-_id'); if (sort) c = c.sort(sort); if (lim) c = c.limit(lim); return c.lean(); };
-  const [company, users, branches, cats, prods, sales, expenses, rets, moves, logs, custs, lays, bl] = await Promise.all([
+  const [company, users, branches, cats, prods, sales, expenses, rets, moves, logs, custs, lays, bl, trf, bn] = await Promise.all([
     Company.findOne({ code: q.u.co })  .select('-_id -rh -renc').lean(), User.find({ co: q.u.co }).select('-_id -h').lean(),
     Branch.find(adm ? { co: q.u.co } : { co: q.u.co, id: { $in: q.u.br || [] } }).select('-_id').lean(),
     L(Cat), L(Prod), L(Sale, { ts: { $gte: cut } }, 5000, { ts: -1 }),
     mgr ? L(Expense, { ts: { $gte: cut } }) : [], mgr ? L(Refund, { ts: { $gte: cut } }) : [],
     mgr ? L(Move, {}, 500, { ts: -1 }) : [], adm ? L(Log, {}, 500, { ts: -1 }) : [],
-    Cust.find({ co: q.u.co }).select('-_id').lean(), L(Lay, { $or: [{ status: 'open' }, { ts: { $gte: cut } }] }), Ledger.aggregate([{ $match: { co: q.u.co } }, { $group: { _id: '$cid', bal: { $sum: '$amt' } } }])]);
+    Cust.find({ co: q.u.co }).select('-_id').lean(), L(Lay, { $or: [{ status: 'open' }, { ts: { $gte: cut } }] }), Ledger.aggregate([{ $match: { co: q.u.co } }, { $group: { _id: '$cid', bal: { $sum: '$amt' } } }]),
+    Trf.find({ $and: [tScope(q), { $or: [{ status: 'pending' }, { ts: { $gte: cut } }] }] }).select('-_id').lean(), Branch.find({ co: q.u.co }).select('-_id id name').lean()]);
   const bals = Object.fromEntries(bl.map(x => [x._id, Math.round(x.bal * 100) / 100]));
   const win = sales.length >= 5000 ? Math.min(...sales.map(x => x.ts)) : cut;
-  s.json({ company, users, branches, cats, prods, sales, expenses, rets, moves, logs, custs, lays, bals, subinfo: subInfo(company), me: q.u.id, v: (company && company.v) || {}, now, win });
+  s.json({ company, users, branches, cats, prods, sales, expenses, rets, moves, logs, custs, lays, bals, trf, bnames: bn, subinfo: subInfo(company), me: q.u.id, v: (company && company.v) || {}, now, win });
 }));
 app.get('/api/ver', auth, wrap(async (q, s) => {   // tiny: lets a device check whether anything changed
   const c = await Company.findOne({ code: q.u.co }).select('v -_id').lean(); s.json({ v: (c && c.v) || {} });
@@ -148,12 +153,12 @@ app.get('/api/range', auth, wrap(async (q, s) => {   // older sales, refunds and
   const [sales, rets, expenses] = await Promise.all([Sale.find(f).select('-_id').sort({ ts: -1 }).limit(20000).lean(), mgr ? Refund.find(f).select('-_id').lean() : [], mgr ? Expense.find(f).select('-_id').lean() : []]);
   s.json({ sales, rets, expenses, truncated: sales.length >= 20000 });
 }));
-const DELTA = { lays: [Lay, 'c'], custs: [Cust, 'c'], sales: [Sale, 'c'], moves: [Move, 'm'], logs: [Log, 'a'], rets: [Refund, 'm'] };
+const DELTA = { trf: [Trf, 'c'], lays: [Lay, 'c'], custs: [Cust, 'c'], sales: [Sale, 'c'], moves: [Move, 'm'], logs: [Log, 'a'], rets: [Refund, 'm'] };
 app.get('/api/delta/:c', auth, wrap(async (q, s) => {   // only records added since the last check
   const now = Date.now(), d = DELTA[q.params.c], r = q.u.role;
   if (!d) fail(404, 'Unknown collection');
   if ((d[1] === 'm' && r === 'cashier') || (d[1] === 'a' && r !== 'admin')) return s.json({ docs: [], now });
-  const docs = await d[0].find({ ...(q.params.c === 'custs' ? { co: q.u.co } : scope(q)), at: { $gt: Number(q.query.after) || 0 } }).select('-_id').sort({ at: 1 }).limit(3000).lean();
+  const docs = await d[0].find({ ...(q.params.c === 'custs' ? { co: q.u.co } : q.params.c === 'trf' ? tScope(q) : scope(q)), at: { $gt: Number(q.query.after) || 0 } }).select('-_id').sort({ at: 1 }).limit(3000).lean();
   s.json({ docs, now, more: docs.length >= 3000, last: docs.length ? docs[docs.length - 1].at : 0 });
 }));
 const COL2 = { prods: Prod, cats: Cat, expenses: Expense };
@@ -272,7 +277,9 @@ app.get('/api/bals', auth, wrap(async (q, s) => {
   s.json({ bals: Object.fromEntries(bl.map(x => [x._id, Math.round(x.bal * 100) / 100])) });
 }));
 app.get('/api/ledger', auth, wrap(async (q, s) => {   // one customer's statement
-  s.json({ docs: await Ledger.find({ co: q.u.co, cid: String(q.query.cid || '') }).select('-_id').sort({ ts: 1 }).limit(2000).lean() });
+  const f = { co: q.u.co };
+  if (q.query.cid) f.cid = String(q.query.cid); else if (q.query.from) f.ts = { $gte: Number(q.query.from), $lt: Number(q.query.to) || Date.now() }; else return s.json({ docs: [] });
+  s.json({ docs: await Ledger.find(f).select('-_id').sort({ ts: 1 }).limit(2000).lean() });
 }));
 app.get('/api/ledgerall', auth, need('admin'), wrap(async (q, s) => {   // for the full backup
   s.json({ docs: await Ledger.find({ co: q.u.co }).select('-_id').sort({ ts: 1 }).limit(100000).lean() });
@@ -330,6 +337,46 @@ app.post('/api/owner/recovery', ownerAuth, wrap(async (q, s) => {   // only the 
   const code = rcode(), co = String(q.body.code || '').toUpperCase();
   if (!(await Company.findOne({ code: co }).lean())) fail(404, 'Company not found.');
   await Company.updateOne({ code: co }, { rh: await bcrypt.hash(code, 10), renc: encCode(code) }); s.json({ code });
+}));
+
+// ---------- stock transfers between branches (the receiving branch accepts or declines) ----------
+const rxe = T.rxEsc, nameRx = n => ({ $regex: '^' + rxe(n) + '$', $options: 'i' });
+const store = {
+  prod: (co, br, id) => Prod.findOne({ co, br, id }).lean(),
+  catById: (co, id) => Cat.findOne({ co, id }).lean(),
+  catByName: (co, br, name) => Cat.findOne({ co, br, name: nameRx(name) }).lean(),
+  findProd: async (co, br, { code, cat, name }) => (code && await Prod.findOne({ co, br, code }).lean()) || Prod.findOne({ co, br, cat, name: nameRx(name) }).lean(),
+  addCat: d => Cat.create(d), addProd: d => Prod.create(d),
+  takeQty: async (co, id, qty) => !!(await Prod.updateOne({ co, id, stock: { $gte: qty } }, { $inc: { stock: -qty } })).modifiedCount,
+  takeSns: async (co, id, sns) => !!(await Prod.updateOne({ co, id, sns: { $all: sns } }, { $pull: { sns: { $in: sns } }, $inc: { stock: -sns.length } })).modifiedCount,
+  giveQty: (co, id, qty) => Prod.updateOne({ co, id }, { $inc: { stock: qty } }),
+  giveSns: async (co, id, sns) => { await Prod.updateOne({ co, id }, { $addToSet: { sns: { $each: sns } } }); const p = await Prod.findOne({ co, id }).lean(); await Prod.updateOne({ co, id }, { $set: { stock: (p.sns || []).length } }); },
+  claim: (co, id, from, to, extra) => Trf.findOneAndUpdate({ co, id, status: from }, { $set: { status: to, ...extra, at: Date.now() } }).lean(),   // returns the document as it was before
+  addTrf: d => Trf.create(d), addMoves: a => a.length ? Move.insertMany(a) : null,
+  stockOf: async (co, id) => { const p = await Prod.findOne({ co, id }).lean(); return p ? p.stock : 0; },
+  nextNo: async co => { const l = await Trf.find({ co }).sort({ no: -1 }).limit(1).lean(); return l.length ? l[0].no + 1 : 1; }
+};
+const tctx = { uid, now: () => Date.now() };
+const getTrf = async q => { const t = await Trf.findOne({ co: q.u.co, id: q.params.id }).lean(); if (!t) fail(404, 'Transfer not found.'); return t; };
+app.post('/api/transfers', auth, need('admin', 'manager'), wrap(async (q, s) => {   // send products to another branch (taken from stock now, added when accepted)
+  const d = q.body, co = q.u.co, from = String(d.from || ''), to = String(d.to || '');
+  if (!okBr(q, from)) fail(403, 'You cannot send from that branch.');
+  if (!to || to === from) fail(400, 'Choose a different branch to send to.');
+  if (!(await Branch.findOne({ co, id: to }).lean())) fail(404, 'The receiving branch was not found.');
+  const t = await T.createTransfer(store, tctx, { co, from, to, items: d.items, note: d.note, by: q.u.name });
+  s.json({ ok: 1, id: t.id, no: t.no });
+}));
+app.post('/api/transfers/:id/accept', auth, wrap(async (q, s) => {
+  const t = await getTrf(q); if (!okBr(q, t.to)) fail(403, 'Only people at the receiving branch can accept this transfer.');
+  await T.acceptTransfer(store, tctx, { co: q.u.co, id: t.id, by: q.u.name, note: q.body.note }); s.json({ ok: 1 });
+}));
+app.post('/api/transfers/:id/decline', auth, wrap(async (q, s) => {
+  const t = await getTrf(q); if (!okBr(q, t.to)) fail(403, 'Only people at the receiving branch can decline this transfer.');
+  await T.returnTransfer(store, tctx, { co: q.u.co, id: t.id, by: q.u.name, note: q.body.note, status: 'declined' }); s.json({ ok: 1 });
+}));
+app.post('/api/transfers/:id/cancel', auth, need('admin', 'manager'), wrap(async (q, s) => {
+  const t = await getTrf(q); if (!okBr(q, t.from)) fail(403, 'Only the sending branch can cancel this transfer.');
+  await T.returnTransfer(store, tctx, { co: q.u.co, id: t.id, by: q.u.name, note: q.body.note, status: 'cancelled' }); s.json({ ok: 1 });
 }));
 
 // ---------- branches (admin only) ----------
