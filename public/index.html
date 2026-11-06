@@ -111,7 +111,7 @@ let token='';try{token=localStorage.getItem('pos3_token')||''}catch(e){}
 const APPEND=['/api/sales','/api/moves','/api/logs','/api/rets','/api/ledger'],UPS=['/api/lays','/api/custs'];
 const pend=()=>load('pos3_q',[]).length;
 const pill=()=>navigator.onLine&&!pend()?'':`<span class="badge" style="background:var(--warn);color:#fff">${navigator.onLine?'Syncing '+pend():'Offline'+(pend()?' · '+pend()+' waiting':'')}</span>`;
-function cacheState(){try{localStorage.setItem('pos3_cache',JSON.stringify({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs,lays,bals,subinfo,trf,bnames,session}))}catch(e){}}
+function cacheState(){try{localStorage.setItem('pos3_cache',JSON.stringify({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs,lays,bals,subinfo,trf,bnames,session,sync:lastSync}))}catch(e){}}
 async function raw(m,p,b){let r;try{r=await fetch((window.POS_API||'')+p,{method:m,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:b?JSON.stringify(b):undefined})}catch(x){const e=new Error('You are offline - connect to the internet and try again');e.net=true;throw e}
   const j=await r.json().catch(()=>({}));if(r.status===402&&j.code==='SUB_EXPIRED'){subBlock={sub:j.sub||{},contact:j.contact||''};const e=new Error(j.error||'Subscription expired');e.sub=true;setTimeout(render,0);throw e}
   if(!r.ok)throw new Error(j.error||(r.status===404||r.status===405?'Server is missing this feature - deploy the latest server.js':'Request failed ('+r.status+')'));return j}
@@ -135,14 +135,14 @@ const ROUTE={[K.g]:'cats',[K.p]:'prods',[K.l]:'sales',[K.e]:'expenses'};
 const save=(k,v)=>{if(ROUTE[k]){api('PUT','/api/'+ROUTE[k],k===K.l?v.slice(-1):v,false,true).catch(e=>toast(e.message,'err'));cacheState()}else try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
 async function boot(q){
   await flushQ();
-  if(pend()){if(!cats.length&&!prods.length){const c=load('pos3_cache',null);if(c)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs=[],lays=[],bals={},subinfo=null,trf=[],bnames=[],session}=c)}return}
+  if(pend()){if(!cats.length&&!prods.length){const c=load('pos3_cache',null);if(c)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs=[],lays=[],bals={},subinfo=null,trf=[],bnames=[],session}=c),lastSync=c.sync||lastSync}return}
   try{const r=await api('GET','/api/data?days=35',null,q);
     const wn=r.win||0,keep=(a,w)=>loadedFrom!==null&&loadedFrom<w?a.filter(x=>x.ts<w):[];   // older records loaded earlier are kept (no window = everything was sent)
     const oS=keep(sales,wn),oR=keep(rets,wn),oE=keep(expenses,wn);
     cos=[r.company];users=r.users;cats=r.cats;prods=r.prods;branches=r.branches||[];custs=r.custs||[];lays=r.lays||[];bals=r.bals||{};subinfo=r.subinfo||null;trf=r.trf||[];bnames=r.bnames||[];moves=r.moves||[];logs=r.logs||[];session=r.me;
     sales=[...r.sales,...oS];rets=[...(r.rets||[]),...oR];expenses=[...(r.expenses||[]),...oE];
-    loadedFrom=loadedFrom===null?wn:Math.min(loadedFrom,wn);ver=r.v||{};['sales','moves','logs','rets','lays','custs','trf'].forEach(k=>syncAt[k]=r.now);cacheState()}
-  catch(e){const c=load('pos3_cache',null);if(e.net&&c&&token)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs=[],lays=[],bals={},subinfo=null,trf=[],bnames=[],session}=c);else throw e}}
+    loadedFrom=loadedFrom===null?wn:Math.min(loadedFrom,wn);ver=r.v||{};['sales','moves','logs','rets','lays','custs','trf'].forEach(k=>syncAt[k]=r.now);lastSync=Date.now();cacheState()}
+  catch(e){const c=load('pos3_cache',null);if(e.net&&c&&token)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs=[],lays=[],bals={},subinfo=null,trf=[],bnames=[],session}=c),lastSync=c.sync||lastSync;else throw e}}
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const CUR=()=>{try{return (C&&C.cur)||'$'}catch(e){return '$'}};
 const nf=n=>(Number(n)||0).toLocaleString('en-US');
@@ -275,6 +275,7 @@ const monKey=()=>yr+'|'+curBr;
 async function pollSync(){   // every 30s: one tiny request; fetch only what changed
   await flushQ();if(pend())return;
   const r=await api('GET','/api/ver',null,true),nv=r.v||{},ch=Object.keys(nv).filter(k=>(nv[k]||0)!==(ver[k]||0));
+  lastSync=Date.now();
   if(!ch.length)return;
   const n0=incoming().length;
   if(ch.some(k=>k==='org'||k==='salesx')){await boot(true);return render()}
@@ -383,7 +384,7 @@ function zBody(d){const z=zData(d),L=(a,b,c)=>`<div class="row"><span>${a}</span
   '<hr>'+L('<b>Cash expected in the till</b>','<b>'+money(z.cash)+'</b>')+'<small class="mut">Cash sales + cash deposits and customer payments − cash refunds. Expenses are not subtracted because they have no payment method.</small><hr><b>By cashier</b>'+(Object.keys(z.by).length?Object.entries(z.by).map(([k,v])=>L(esc(k)+' ('+v.n+')',money(v.t))).join(''):L('—','—'))+'<br><br>Counted cash: ______________ &nbsp; Signed: ______________'}
 async function loadLedgerRange(d){if(!token||!navigator.onLine)return;try{const f=new Date(d+'T00:00').getTime(),r=await api('GET','/api/ledger?from='+f+'&to='+(f+864e5),null,true),ids=new Set(ledger.map(x=>x.id));r.docs.forEach(x=>{if(!ids.has(x.id))ledger.push(x)});render()}catch(e){}}
 function printPage(title){const old=ps;ps=0;document.querySelectorAll('.tblw>table:not(.nt)').forEach(applyT);document.body.classList.add('pp');
-  const h=document.createElement('div');h.className='ph';h.innerHTML='<b>'+esc(C.name)+'</b> — '+esc(title)+'<br><small>'+esc(curBr==='all'?'All branches':brName(curBr))+' · printed '+new Date().toLocaleString()+' by '+esc(U.name)+'</small>';$('#app').prepend(h);
+  const h=document.createElement('div');h.className='ph';h.innerHTML='<b>'+esc(C.name)+'</b> — '+esc(title)+'<br><small>'+esc(curBr==='all'?'All branches':brName(curBr))+' · data as of '+new Date(lastSync).toLocaleString()+' · printed '+new Date().toLocaleString()+' by '+esc(U.name)+'</small>';$('#app').prepend(h);
   const done=()=>{window.removeEventListener('afterprint',done);document.body.classList.remove('pp');h.remove();ps=old;render()};window.addEventListener('afterprint',done);setTimeout(()=>window.print(),50);setTimeout(()=>{if(document.body.classList.contains('pp'))done()},90000)}
 function transfersView(){
   const al=allowedBr(),rel=t=>curBr==='all'?(al.includes(t.from)||al.includes(t.to)):(t.from===curBr||t.to===curBr),L=trf.filter(rel).sort((a,b)=>b.ts-a.ts),inc=L.filter(t=>t.status==='pending'&&al.includes(t.to)&&(curBr==='all'||t.to===curBr)),out=L.filter(t=>t.status==='pending'&&al.includes(t.from)&&(curBr==='all'||t.from===curBr));
@@ -391,6 +392,17 @@ function transfersView(){
   return `<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Transfers</h2>${can('products')&&curBr!=='all'?'<button class="pri" data-act="open" data-id="trnew">+ New transfer</button>':''}</div><div class="stats"><div class="stat"><span class="mut">Incoming, waiting for you</span><b class="${inc.length?'neg':''}">${nf(inc.length)}</b></div><div class="stat"><span class="mut">Sent, waiting for the other branch</span><b>${nf(out.length)}</b></div></div>${curBr==='all'&&can('products')?'<small class="mut" style="display:block;margin-top:8px">Choose a branch (Settings > Branch) to send a new transfer.</small>':''}</div>
   <div class="card"><div class="tblw">${L.length?`<table><tr><th>No.</th><th>Date</th><th>From</th><th>To</th><th>Items</th><th>Note</th><th>Status</th><th></th></tr>${L.map(t=>{const mineIn=t.status==='pending'&&al.includes(t.to)&&(curBr==='all'||t.to===curBr),mineOut=t.status==='pending'&&al.includes(t.from)&&(curBr==='all'||t.from===curBr);
     return `<tr><td data-v="${t.no}">TRF-${t.no}</td><td data-v="${t.ts}">${new Date(t.ts).toLocaleDateString()}</td><td>${esc(bnm(t.from))}</td><td>${esc(bnm(t.to))}</td><td style="white-space:normal;min-width:160px">${esc(t.items.map(i=>i.qty+'× '+i.name).join(', '))}</td><td style="white-space:normal;min-width:110px">${esc(t.note||'')}${t.decNote?'<br><small class="mut">Reply: '+esc(t.decNote)+'</small>':''}</td><td><span class="${t.status==='pending'?'low':t.status==='accepted'?'pos':'neg'}">${stl[t.status]||t.status}</span>${t.decidedBy?'<br><small class="mut">'+esc(t.decidedBy)+'</small>':''}</td><td class="r" style="white-space:nowrap">${mineIn&&can('stock')?`<button class="pri" data-act="open" data-id="tracc" data-x="${t.id}">Accept</button> <button class="del" data-act="open" data-id="trdec" data-x="${t.id}">Decline</button> `:''}${mineOut&&can('products')?`<button class="del" data-act="trcancel" data-id="${t.id}">Cancel</button> `:''}<button data-act="open" data-id="trdoc" data-x="${t.id}">Print</button></td></tr>`}).join('')}</table>`:'<p class="mut">No transfers yet. Use + New transfer to send products to another branch.</p>'}</div></div>`}
+let lastSync=Date.now(),freshKey='',appSig='',newVer=false;
+const FRESH_MS=3*60000;
+const ago=ts=>{const m=Math.floor((Date.now()-ts)/60000);return !ts?'a while ago':m<1?'just now':m<60?m+' min ago':m<1440?Math.floor(m/60)+' h ago':new Date(ts).toLocaleString()};
+const freshK=()=>(navigator.onLine?'on':'off')+'|'+Math.floor((Date.now()-lastSync)/60000)+'|'+newVer+'|'+pend();
+function freshBanner(){if(!U)return '';const off=!navigator.onLine,pn=pend();let h='';
+  if(off)h+=`<div class="sbar bad">Offline: you are seeing data saved on this device (updated ${ago(lastSync)}).${pn?' '+pn+' change'+(pn===1?'':'s')+' will sync when you reconnect.':''}</div>`;
+  else if(Date.now()-lastSync>FRESH_MS)h+=`<div class="sbar">Data may be out of date. It was last updated ${ago(lastSync)}. <button data-act="refreshnow">Refresh</button></div>`;
+  if(newVer)h+=`<div class="sbar">A newer version of the app is available. <button data-act="reloadapp">Reload</button></div>`;
+  return h}
+async function refreshNow(){await flushQ();if(pend())return toast('Some changes are still waiting to sync','warn');try{await boot(true);toast('Data refreshed');render()}catch(e){if(!e.sub)toast(e.message,'err')}}
+async function checkVer(){if(!navigator.onLine)return;try{const r=await fetch('/index.html',{method:'HEAD',cache:'no-store'}),g=r.headers.get('etag')||r.headers.get('last-modified')||r.headers.get('content-length')||'';if(!g)return;if(!appSig){appSig=g;return}if(g!==appSig&&!newVer){newVer=true;render()}}catch(e){}}
 const EXC=['Rent','Transport','Salaries','Utilities','Supplies','Marketing','Other'];
 const PWF=n=>`<div class="pw"><input name="${n}" type="${showpw?'text':'password'}" data-pw minlength="4" required><button type="button" data-act="showpw" aria-label="Show or hide password">${showpw?EYEOFF:EYE}</button></div>`;
 const rfOf=id=>bmine(rets).filter(x=>x.sid===id).reduce((a,e)=>a+e.amt,0);
@@ -434,7 +446,7 @@ function render(){
   if(needUnlock){needUnlock=false;if(lockCfg())lk=true}
   if(!curBr||(curBr!=='all'&&!allowedBr().includes(curBr))||(curBr==='all'&&allowedBr().length<2))pickBr();
   if(!can(tab))tab='sell';
-  $('#app').innerHTML=shell()+(dr?drawerView():'')+(md?mdView():'')+(rc?receiptModal():'')+(lk?lockView():'');enhance();if(lk){const pi=document.querySelector('.lock input');if(pi)pi.focus()}syncNeeds();
+  $('#app').innerHTML=shell()+(dr?drawerView():'')+(md?mdView():'')+(rc?receiptModal():'')+(lk?lockView():'');enhance();if(lk){const pi=document.querySelector('.lock input');if(pi)pi.focus()}syncNeeds();freshKey=freshK();
 }
 function authView(){
   const reg=mode==='reg',rs=mode==='reset';
@@ -448,7 +460,7 @@ function authView(){
 }
 function shell(){
   const main=['sell','report'].filter(can),tabs=main.includes(tab)?main:[...main,tab];
-  return `<nav><div class="tabs">${tabs.map(t=>`<button class="${tab===t?'act':''}" data-act="tab" data-id="${t}">${TABS[t]}</button>`).join('')}</div>${PRINTABLE.includes(tab)?'<button class="gear" data-act="printpage" aria-label="Print this page">🖨</button>':''}<button class="gear" data-act="open" data-id="gsearch" aria-label="Search everything">🔍</button><button class="gear" data-act="drawer" aria-label="Settings">⚙️</button></nav>${subBanner()}${trBanner()}
+  return `<nav><div class="tabs">${tabs.map(t=>`<button class="${tab===t?'act':''}" data-act="tab" data-id="${t}">${TABS[t]}</button>`).join('')}</div>${PRINTABLE.includes(tab)?'<button class="gear" data-act="printpage" aria-label="Print this page">🖨</button>':''}<button class="gear" data-act="open" data-id="gsearch" aria-label="Search everything">🔍</button><button class="gear" data-act="drawer" aria-label="Settings">⚙️</button></nav>${subBanner()}${freshBanner()}${trBanner()}
   ${(curBr==='all'&&BONLY.includes(tab))?branchNotice():{sell:sellView,products:prodView,stock:stockView,report:reportView,users:userView,expenses:expensesView,history:historyView,lowstock:lowView,stockrep:stockRepView,audit:auditView,backup:backupView,branches:branchesView,prices:pricesView,aged:agedView,customers:custView,layaway:layView,serials:serialsView,transfers:transfersView}[tab]()}
   <footer class="bar"><div><b><img src="/icon-192.png" alt="" style="width:20px;height:20px;border-radius:5px;vertical-align:-4px;margin-right:6px;background:#fff" onerror="this.remove()">${esc(C.name)}</b><br><small class="mut">${esc(U.name)} · ${curBr==='all'?'All branches':esc(brName(curBr))}</small><span class="badge">${U.role}</span>${pill()}</div></footer>`;
 }
@@ -884,6 +896,8 @@ document.addEventListener('click',e=>{
   if(a==='reccopy'){if(navigator.clipboard)navigator.clipboard.writeText(recovery).then(()=>toast('Recovery code copied'));else toast('Copying is not supported here','warn');return}
   if(a==='printpage'){const RTL={overview:'Overview',sales:'Sales',profit:'Profit',payments:'Payments',monthly:'Monthly',trends:'Top sellers & trends'};return printPage((TABS[tab]||'Report')+(tab==='report'?' - '+(RTL[rtab]||''):''))}
   if(a==='trcancel'){const t=trf.find(x=>x.id===id);if(!t)return;return ask('Cancel TRF-'+t.no+'? The items go back into your stock.',async()=>{await api('POST','/api/transfers/'+t.id+'/cancel',{});await boot(true);toast('Transfer cancelled: items returned to stock')})}
+  if(a==='refreshnow')return refreshNow();
+  if(a==='reloadapp'){location.reload();return}
   if(a==='recdone'){md=null;recovery=''}
   if(a==='showpw'){showpw=!showpw;document.querySelectorAll('input[data-pw]').forEach(i=>i.type=showpw?'text':'password');document.querySelectorAll('[data-act=showpw]').forEach(x=>x.innerHTML=showpw?EYEOFF:EYE);return}
   if(a==='print')return window.print();
@@ -966,6 +980,9 @@ document.addEventListener('change',e=>{const t=e.target;
   if(t.dataset.all){document.querySelectorAll('#'+t.dataset.all+' tr[data-h]').forEach(r=>{if(r.style.display==='none')return;const i=r.querySelector('input[type=checkbox][name]');if(i&&i.checked!==t.checked){i.checked=t.checked;i.dispatchEvent(new Event('change',{bubbles:true}))}})}
   else if(t.dataset.grp){document.querySelectorAll('input[data-g="'+t.dataset.grp+'"]').forEach(i=>{if(i.closest('tr').style.display!=='none')i.checked=t.checked})}
   else if(t.name&&t.name.startsWith('p_')&&t.closest('#trl')){t.closest('tr').querySelectorAll('details input').forEach(i=>{i.checked=t.checked})}});
+setInterval(()=>{if(!U||freshK()===freshKey)return;if(!md&&!rc&&!dr&&!lk&&!document.querySelector('.cfm')&&!['INPUT','SELECT','TEXTAREA'].includes((document.activeElement||{}).tagName))render()},20000);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){if(token&&U&&Date.now()-lastSync>60000)pollSync().catch(()=>{});checkVer()}});
+checkVer();setInterval(checkVer,15*60000);
 applyTheme();
 render();
 if(token)boot().then(render).catch(e=>{if(e.sub)return render();if(!e.net){token='';try{localStorage.removeItem('pos3_token')}catch(x){}}render()});
