@@ -18,7 +18,7 @@ const Company = mongoose.model('Company', new mongoose.Schema(
   { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String, cur: String, fields: { type: Array, default: [] }, v: { type: Object, default: {} }, rcpt: { type: Object, default: {} }, rh: String, renc: String, sub: { type: Object }, created: Number }, { versionKey: false }));
 const User = M('User', { user: String, name: String, role: String, h: String });
 const Branch = M('Branch', { name: String, loc: String });
-const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund'), Lay = M('Lay'), Ledger = M('Ledger'), Cust = M('Cust'), Trf = M('Trf');
+const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund'), Lay = M('Lay'), Ledger = M('Ledger'), Cust = M('Cust'), Trf = M('Trf'), Counter = M('Counter');
 const DATA = [Cat, Prod, Sale, Expense, Move, Log, Refund, Lay, Ledger];   // everything that belongs to one branch (has a `br` field)
 
 // ---------- helpers ----------
@@ -90,6 +90,7 @@ app.use('/api', (q, s, n) => {
       let ks = [];
       if (m === 'PUT' && VKEY[p]) ks = [VKEY[p]];
       else if (p.startsWith('/api/sales/')) ks = ['salesx'];
+      else if (p.startsWith('/api/dupes')) ks = ['salesx'];
       else if (p.startsWith('/api/transfers')) ks = ['prods', 'cats', 'trf', 'moves'];
       else if (p === '/api/restore') ks = ['org', 'salesx', 'prods', 'cats', 'expenses', 'moves', 'logs', 'rets', 'custs', 'lays', 'ledger'];
       else if (p !== '/api/recovery/show' && /^\/api\/(users|branches|company|password|recovery)/.test(p)) ks = ['org'];
@@ -195,11 +196,20 @@ app.put('/api/sales', auth, wrap(async (q, s) => {   // append-only
   s.json({ ok: 1 });
 }));
 
-const SALE_FIELDS = ['ts', 'total', 'profit', 'items', 'refs', 'refunded', 'otot'];
+const SALE_FIELDS = ['ts', 'total', 'profit', 'items', 'refs', 'refunded', 'otot', 'cust', 'pays', 'pay'];
 app.patch('/api/sales/:id', auth, need('admin', 'manager'), wrap(async (q, s) => {   // change date
   const set = {};
   for (const k of SALE_FIELDS) if (q.body[k] !== undefined) set[k] = q.body[k];
   if ('ts' in set) { set.ts = Number(set.ts); if (!set.ts) fail(400, 'Bad date'); }
+  if ('cust' in set) { const c = set.cust; set.cust = c ? { name: String(c.name || '').trim().slice(0, 80), phone: String(c.phone || '').trim().slice(0, 30), note: String(c.note || '').trim().slice(0, 200) } : null; }
+  if ('pay' in set) set.pay = String(set.pay || '').slice(0, 30);
+  if ('pays' in set) {   // payment methods and codes can be corrected, but never the amounts, and never to or from credit
+    const old = await Sale.findOne({ ...scope(q), id: q.params.id }).lean();
+    if (!old) fail(404, 'Receipt not found.');
+    const op = old.pays || [];
+    if (!Array.isArray(set.pays) || set.pays.length !== op.length || set.pays.some((p, i) => Number(p.amt) !== Number(op[i].amt) || (p.m === 'Credit') !== (op[i].m === 'Credit'))) fail(400, 'Payment amounts cannot be changed here.');
+    set.pays = set.pays.map(p => ({ m: String(p.m).slice(0, 30), amt: Number(p.amt), ref: String(p.ref || '').slice(0, 60) }));
+  }
   if (!Object.keys(set).length) fail(400, 'Nothing to update');
   await Sale.updateOne({ ...scope(q), id: q.params.id }, { $set: set }); s.json({ ok: 1 });
 }));
@@ -337,6 +347,38 @@ app.post('/api/owner/recovery', ownerAuth, wrap(async (q, s) => {   // only the 
   const code = rcode(), co = String(q.body.code || '').toUpperCase();
   if (!(await Company.findOne({ code: co }).lean())) fail(404, 'Company not found.');
   await Company.updateOne({ code: co }, { rh: await bcrypt.hash(code, 10), renc: encCode(code) }); s.json({ code });
+}));
+
+// ---------- receipt numbers: the server hands out the next number so two devices never use the same one ----------
+async function nextSeq(co, br, k) {
+  const f = { co, br, k };
+  if (!(await Counter.findOne(f).lean())) {   // first use: carry on from the highest number already used in this branch
+    const m = k === 'lay' ? await Lay.find({ co, br, no: { $lt: 100000 } }).sort({ no: -1 }).limit(1).lean() : await Sale.find({ co, br, no: { $lt: 100000 } }).sort({ no: -1 }).limit(1).lean();
+    await Counter.updateOne(f, { $setOnInsert: { seq: m.length ? m[0].no || 0 : 0 } }, { upsert: true });
+  }
+  return (await Counter.findOneAndUpdate(f, { $inc: { seq: 1 } }, { new: true }).lean()).seq;
+}
+app.post('/api/seq', auth, wrap(async (q, s) => {
+  const br = String(q.body.br || ''), k = q.body.k === 'lay' ? 'lay' : 'rcpt';
+  if (!okBr(q, br)) fail(403, 'Not allowed for that branch.');
+  s.json({ no: await nextSeq(q.u.co, br, k) });
+}));
+app.post('/api/device', auth, wrap(async (q, s) => {   // each device gets a small number, used to number receipts made while offline (for example 2 -> D2-0001)
+  const f = { co: q.u.co, br: '_', k: 'dev' };
+  await Counter.updateOne(f, { $setOnInsert: { seq: 0 } }, { upsert: true });
+  s.json({ dev: ((await Counter.findOneAndUpdate(f, { $inc: { seq: 1 } }, { new: true }).lean()).seq - 1) % 900 + 1 });
+}));
+const dupeGroups = co => Sale.aggregate([{ $match: { co, no: { $ne: null } } }, { $group: { _id: { br: '$br', no: '$no' }, n: { $sum: 1 } } }, { $match: { n: { $gt: 1 } } }, { $limit: 500 }]);
+app.get('/api/dupes', auth, need('admin'), wrap(async (q, s) => {
+  const g = await dupeGroups(q.u.co); s.json({ groups: g.length, extra: g.reduce((a, x) => a + x.n - 1, 0) });
+}));
+app.post('/api/dupes/fix', auth, need('admin'), wrap(async (q, s) => {   // the oldest receipt keeps the number, the others get new ones
+  const co = q.u.co; let fixed = 0;
+  for (const x of await dupeGroups(co)) {
+    const docs = await Sale.find({ co, br: x._id.br, no: x._id.no }).sort({ ts: 1 }).select('id').lean();
+    for (const d of docs.slice(1)) { await Sale.updateOne({ co, id: d.id }, { $set: { no: await nextSeq(co, x._id.br, 'rcpt'), oldNo: x._id.no } }); fixed++; }
+  }
+  s.json({ fixed });
 }));
 
 // ---------- stock transfers between branches (the receiving branch accepts or declines) ----------

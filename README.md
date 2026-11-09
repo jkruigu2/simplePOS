@@ -110,3 +110,17 @@ Existing companies have no recovery code yet: log in as admin, open Settings and
 - **Copy products between branches** (admin): **Settings > Products & categories > Copy to branch** or **Branches > Copy products**. Copy **one product**, **a whole category** (tick the category), **chosen products**, or **everything**. Prices, barcodes and custom columns are copied; stock can be copied too (not for serial products). Products the other branch already has are skipped. Each product also has a **Copy** button in its category's *View products* list.
 - **Printing**: a 🖨 button at the top right prints the page you are on (every report tab, stock report, aged stock, price history, expenses, stock history, customers, layaways, transfers and more) with a heading, the branch and the date; all rows are printed, and any hidden columns stay hidden. Ready-made documents: **Price list** (Products page), **Stock count sheet** with blank "Counted" column (Stock page), **Daily summary** with cash expected in the till (Reports), transfer notes, receipts, layaway receipts and customer statements.
 - Redeploy BOTH `server.js` (and the new `lib/transfer.js`) and `public/`.
+
+## Notes about outdated data
+- **Offline**: a red note at the top says "you are seeing data saved on this device (updated 2 h ago)" and how many changes are waiting to sync. It disappears when the device reconnects and refreshes.
+- **Not refreshed for 3 minutes while online** (for example a slow connection or a long-open form): "Data may be out of date. It was last updated 6 min ago" with a **Refresh** button. Every successful background check (every 30 seconds) and every refresh resets it; coming back to the app after being away refreshes it too.
+- **Newer app version**: when a new version has been deployed, "A newer version of the app is available" with a **Reload** button.
+- Printed pages say "data as of ..." in their heading.
+- Only `public/index.html` changed in this version.
+
+## Receipt numbers, stock number editing, receipt editing
+- **No more duplicate receipt numbers**: when online, the server hands out the next receipt number for the branch at checkout, so two devices can never use the same one. When a device is offline, its receipts are numbered with its own device number (for example **D2-0001**, shown on the receipt and in the lists) and cannot clash with anything; they sync normally when the connection returns. Layaway numbers work the same way. Tapping Checkout twice while a sale is saving is ignored.
+- **Fix numbers that already clash** (admin): **Settings > Backup & export > Receipt numbers > Check for duplicate numbers**, then **Give them new numbers**. The oldest receipt keeps its number.
+- **Edit the stock number**: **Edit** next to the stock figure in the Stock list, the Low stock list and a category's product list (admin, manager). Type the real count; the difference goes into stock history and the audit log. For serial-number products the same button opens a screen to remove units (damaged, lost…) and add new ones.
+- **Edit receipt details** (admin, manager): **Reports > Sales > Edit** changes the customer name, phone and note, and the payment method and transaction code of each payment. Amounts and items cannot be changed there (use refund or delete), and credit payments are locked. The change goes in the audit log and the receipt prints the new details.
+- Redeploy BOTH `server.js` and `public/`. `tests/` holds the browser test for this version.
