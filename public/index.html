@@ -120,8 +120,24 @@ function enqueue(m,p,b){let q=load('pos3_q',[]);
   else if(UPS.includes(p)){const e=q.find(x=>x.p===p);if(e)b.forEach(x=>{const i=e.b.findIndex(y=>y.id===x.id);if(i<0)e.b.push(x);else e.b[i]=x});else q.push({m,p,b:[...b]})}
   else{q=q.filter(x=>x.p!==p);q.push({m,p,b})}
   try{localStorage.setItem('pos3_q',JSON.stringify(q))}catch(e){}}
-async function flushQ(){let q=load('pos3_q',[]);
-  while(q.length){const e=q[0];try{await raw(e.m,e.p,e.b)}catch(x){if(x.net||x.sub)return false;toast(x.message,'err')}q.shift();try{localStorage.setItem('pos3_q',JSON.stringify(q))}catch(x){}}return true}
+let flushing=null;
+function flushQ(){   // only one sender at a time (before, several timers could send the same sale together and create copies)
+  if(flushing)return flushing;
+  flushing=(async()=>{
+    while(true){
+      const q=load('pos3_q',[]);if(!q.length)return true;
+      const sent=JSON.parse(JSON.stringify(q[0]));
+      try{await raw(sent.m,sent.p,sent.b)}catch(x){if(x.net||x.sub)return false;toast(x.message,'err')}
+      // take out only what was sent: changes made while we were sending stay in the queue
+      const cur=load('pos3_q',[]),i=cur.findIndex(y=>y.p===sent.p&&y.m===sent.m);
+      if(i>=0){
+        if(APPEND.includes(sent.p)||UPS.includes(sent.p)){const old=new Map(sent.b.map(x=>[x.id,JSON.stringify(x)]));cur[i].b=cur[i].b.filter(x=>!old.has(x.id)||old.get(x.id)!==JSON.stringify(x));if(!cur[i].b.length)cur.splice(i,1)}
+        else if(JSON.stringify(cur[i].b)===JSON.stringify(sent.b))cur.splice(i,1);
+        try{localStorage.setItem('pos3_q',JSON.stringify(cur))}catch(x){}
+      }
+    }
+  })().finally(()=>{flushing=null});
+  return flushing}
 let nb=0;
 function busy(on,m){nb=Math.max(0,nb+(on?1:-1));let e=document.getElementById('ld');
   if(nb>0&&!e){e=document.createElement('div');e.id='ld';e.className='ld';e.innerHTML='<div class="spin"></div><div id="ldt"></div>';document.body.appendChild(e)}
@@ -133,14 +149,15 @@ async function api(m,p,b,quiet,queue){if(!quiet)busy(true,m);
   finally{if(!quiet)busy(false)}}
 const ROUTE={[K.g]:'cats',[K.p]:'prods',[K.l]:'sales',[K.e]:'expenses'};
 const save=(k,v)=>{if(ROUTE[k]){api('PUT','/api/'+ROUTE[k],k===K.l?v.slice(-1):v,false,true).catch(e=>toast(e.message,'err'));cacheState()}else try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+const uq=a=>{const k=new Set();return a.filter(x=>x&&!k.has(x.id)&&k.add(x.id))};
 async function boot(q){
   await flushQ();
   if(pend()){if(!cats.length&&!prods.length){const c=load('pos3_cache',null);if(c)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs=[],lays=[],bals={},subinfo=null,trf=[],bnames=[],session}=c),lastSync=c.sync||lastSync}return}
   try{const r=await api('GET','/api/data?days=35',null,q);
     const wn=r.win||0,keep=(a,w)=>loadedFrom!==null&&loadedFrom<w?a.filter(x=>x.ts<w):[];   // older records loaded earlier are kept (no window = everything was sent)
     const oS=keep(sales,wn),oR=keep(rets,wn),oE=keep(expenses,wn);
-    cos=[r.company];users=r.users;cats=r.cats;prods=r.prods;branches=r.branches||[];custs=r.custs||[];lays=r.lays||[];bals=r.bals||{};subinfo=r.subinfo||null;trf=r.trf||[];bnames=r.bnames||[];moves=r.moves||[];logs=r.logs||[];session=r.me;
-    sales=[...r.sales,...oS];rets=[...(r.rets||[]),...oR];expenses=[...(r.expenses||[]),...oE];
+    cos=[r.company];users=r.users;cats=r.cats;prods=r.prods;branches=r.branches||[];custs=r.custs||[];lays=uq(r.lays||[]);bals=r.bals||{};subinfo=r.subinfo||null;trf=r.trf||[];bnames=r.bnames||[];moves=uq(r.moves||[]);logs=uq(r.logs||[]);session=r.me;
+    sales=uq([...r.sales,...oS]);rets=uq([...(r.rets||[]),...oR]);expenses=uq([...(r.expenses||[]),...oE]);
     loadedFrom=loadedFrom===null?wn:Math.min(loadedFrom,wn);ver=r.v||{};['sales','moves','logs','rets','lays','custs','trf'].forEach(k=>syncAt[k]=r.now);lastSync=Date.now();cacheState();ensureDev()}
   catch(e){const c=load('pos3_cache',null);if(e.net&&c&&token)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs=[],lays=[],bals={},subinfo=null,trf=[],bnames=[],session}=c),lastSync=c.sync||lastSync;else throw e}}
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -547,7 +564,7 @@ function auditView(){const L=bmine(logs).sort((a,b)=>b.ts-a.ts);
   return `<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Audit log</h2><button data-act="exp" data-id="logs-all">Export CSV</button></div><div class="tblw">${L.length?`<table><tr><th>Date</th><th>User</th><th>Action</th><th>Detail</th></tr>${L.map(l=>`<tr><td data-v="${l.ts}">${new Date(l.ts).toLocaleString()}</td><td>${esc(l.by)}</td><td>${esc(l.act)}</td><td>${esc(l.detail||'')}</td></tr>`).join('')}</table>`:'<p class="mut">Nothing logged yet.</p>'}</div></div>`}
 function backupView(){const b=(k,t)=>`<button data-act="exp" data-id="${k}-all">${t}</button>`;
   return `<div class="card"><h2>Export to CSV</h2><p class="mut" style="margin-top:0">Opens in Excel or Google Sheets.</p><div class="row" style="flex-wrap:wrap;justify-content:flex-start">${b('sales','Sales')}${b('products','Products &amp; stock')}${b('expenses','Expenses')}${b('rets','Refunds')}${b('moves','Stock history')}${b('logs','Audit log')}</div></div>
-  <div class="card"><h2>Receipt numbers</h2><p class="mut" style="margin-top:0">Receipts made on two devices at the same time, or while offline, could end up with the same number. This finds them and gives the later ones new numbers (the oldest keeps its number).</p><button data-act="dupecheck">Check for duplicate numbers</button>${dupeInfo?`<p style="margin-bottom:6px"><b>${dupeInfo.extra?nf(dupeInfo.extra)+' receipt'+(dupeInfo.extra===1?'':'s')+' share a number with another receipt.':'No duplicate receipt numbers found.'}</b></p>${dupeInfo.extra?'<button class="pri" data-act="dupefix">Give them new numbers</button>':''}`:''}</div>
+  <div class="card"><h2>Duplicate receipts</h2><p class="mut" style="margin-top:0">Looks for (1) the same receipt saved more than once, which makes your totals too high, and (2) different receipts that share a number. Repeated copies are removed. Receipts that share a number get new numbers (the oldest keeps its number).</p><button data-act="dupecheck">Check now</button>${dupeInfo?`<p style="margin-bottom:6px"><b>${(dupeInfo.copies||dupeInfo.extra)?(dupeInfo.copies?nf(dupeInfo.copies)+' repeated cop'+(dupeInfo.copies===1?'y':'ies')+' of saved records. ':'')+(dupeInfo.extra?nf(dupeInfo.extra)+' receipt'+(dupeInfo.extra===1?'':'s')+' share a number.':''):'Nothing to fix.'}</b></p>${(dupeInfo.copies||dupeInfo.extra)?'<button class="pri" data-act="dupefix">Clean up</button>':''}`:''}</div>
   <div class="card"><h2>Backup</h2><p class="mut" style="margin-top:0">One file with all your categories, products, sales, expenses, refunds and logs. Keep it somewhere safe.</p><button class="pri" data-act="backupjson">Download full backup</button></div>
   <div class="card"><h2>Restore from backup</h2><p class="mut" style="margin-top:0">This replaces ALL current data for this company with the file's contents. Users and passwords are not changed.</p><input type="file" id="rf" accept="application/json,.json"><button class="del" data-act="restore">Restore backup</button></div>`}
 function drawerView(){
@@ -914,7 +931,7 @@ document.addEventListener('click',e=>{
   if(a==='refreshnow')return refreshNow();
   if(a==='reloadapp'){location.reload();return}
   if(a==='dupecheck')return api('GET','/api/dupes').then(r=>{dupeInfo=r;render()}).catch(e=>toast(e.message,'err'));
-  if(a==='dupefix')return ask('Give the later duplicate receipts new numbers?',async()=>{const r=await api('POST','/api/dupes/fix');dupeInfo=null;await boot(true);audit('Receipt numbers fixed',r.fixed+' receipts renumbered');toast(r.fixed+' receipt'+(r.fixed===1?'':'s')+' renumbered')});
+  if(a==='dupefix')return ask('Remove repeated copies and renumber receipts that share a number?',async()=>{const r=await api('POST','/api/dupes/fix');dupeInfo=null;await boot(true);audit('Duplicate receipts cleaned',(r.removed||0)+' copies removed, '+(r.fixed||0)+' renumbered');toast((r.removed||0)+' repeated cop'+((r.removed||0)===1?'y':'ies')+' removed, '+(r.fixed||0)+' renumbered')});
   if(a==='recdone'){md=null;recovery=''}
   if(a==='showpw'){showpw=!showpw;document.querySelectorAll('input[data-pw]').forEach(i=>i.type=showpw?'text':'password');document.querySelectorAll('[data-act=showpw]').forEach(x=>x.innerHTML=showpw?EYEOFF:EYE);return}
   if(a==='print')return window.print();

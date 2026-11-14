@@ -22,6 +22,12 @@ const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense')
 const DATA = [Cat, Prod, Sale, Expense, Move, Log, Refund, Lay, Ledger];   // everything that belongs to one branch (has a `br` field)
 
 // ---------- helpers ----------
+const uniq = a => { const s = new Set(); return a.filter(x => x && !s.has(x.id) && s.add(x.id)); };   // never show the same record twice
+async function insertOnce(Mo, docs) {   // a record that already exists (same company and id) is left alone, so repeated or overlapping requests cannot create copies
+  if (!docs.length) return;
+  try { await Mo.bulkWrite(docs.map(d => { const { co, id, ...rest } = d; return { updateOne: { filter: { co, id }, update: { $setOnInsert: rest }, upsert: true } }; }), { ordered: false }); }
+  catch (e) { if (!(e.code === 11000 || /E11000/.test(String(e.message)))) throw e; }   // a duplicate-key refusal means another request saved it first: fine
+}
 const ROLES = ['admin', 'manager', 'cashier'];
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const fail = (c, m) => { const e = new Error(m); e.status = c; throw e; };
@@ -140,11 +146,11 @@ app.get('/api/data', auth, wrap(async (q, s) => {
     L(Cat), L(Prod), L(Sale, { ts: { $gte: cut } }, 5000, { ts: -1 }),
     mgr ? L(Expense, { ts: { $gte: cut } }) : [], mgr ? L(Refund, { ts: { $gte: cut } }) : [],
     mgr ? L(Move, {}, 500, { ts: -1 }) : [], adm ? L(Log, {}, 500, { ts: -1 }) : [],
-    Cust.find({ co: q.u.co }).select('-_id').lean(), L(Lay, { $or: [{ status: 'open' }, { ts: { $gte: cut } }] }), Ledger.aggregate([{ $match: { co: q.u.co } }, { $group: { _id: '$cid', bal: { $sum: '$amt' } } }]),
+    Cust.find({ co: q.u.co }).select('-_id').lean(), L(Lay, { $or: [{ status: 'open' }, { ts: { $gte: cut } }] }), Ledger.aggregate([{ $match: { co: q.u.co } }, { $group: { _id: '$id', cid: { $first: '$cid' }, amt: { $first: '$amt' } } }, { $group: { _id: '$cid', bal: { $sum: '$amt' } } }]),
     Trf.find({ $and: [tScope(q), { $or: [{ status: 'pending' }, { ts: { $gte: cut } }] }] }).select('-_id').lean(), Branch.find({ co: q.u.co }).select('-_id id name').lean()]);
   const bals = Object.fromEntries(bl.map(x => [x._id, Math.round(x.bal * 100) / 100]));
   const win = sales.length >= 5000 ? Math.min(...sales.map(x => x.ts)) : cut;
-  s.json({ company, users, branches, cats, prods, sales, expenses, rets, moves, logs, custs, lays, bals, trf, bnames: bn, subinfo: subInfo(company), me: q.u.id, v: (company && company.v) || {}, now, win });
+  s.json({ company, users, branches, cats, prods, sales: uniq(sales), expenses: uniq(expenses), rets: uniq(rets), moves: uniq(moves), logs: uniq(logs), custs, lays: uniq(lays), bals, trf, bnames: bn, subinfo: subInfo(company), me: q.u.id, v: (company && company.v) || {}, now, win });
 }));
 app.get('/api/ver', auth, wrap(async (q, s) => {   // tiny: lets a device check whether anything changed
   const c = await Company.findOne({ code: q.u.co }).select('v -_id').lean(); s.json({ v: (c && c.v) || {} });
@@ -152,7 +158,7 @@ app.get('/api/ver', auth, wrap(async (q, s) => {   // tiny: lets a device check 
 app.get('/api/range', auth, wrap(async (q, s) => {   // older sales, refunds and expenses on request
   const f = { ...scope(q), ts: { $gte: Number(q.query.from) || 0, $lt: Number(q.query.to) || Date.now() } }, mgr = q.u.role !== 'cashier';
   const [sales, rets, expenses] = await Promise.all([Sale.find(f).select('-_id').sort({ ts: -1 }).limit(20000).lean(), mgr ? Refund.find(f).select('-_id').lean() : [], mgr ? Expense.find(f).select('-_id').lean() : []]);
-  s.json({ sales, rets, expenses, truncated: sales.length >= 20000 });
+  s.json({ sales: uniq(sales), rets: uniq(rets), expenses: uniq(expenses), truncated: sales.length >= 20000 });
 }));
 const DELTA = { trf: [Trf, 'c'], lays: [Lay, 'c'], custs: [Cust, 'c'], sales: [Sale, 'c'], moves: [Move, 'm'], logs: [Log, 'a'], rets: [Refund, 'm'] };
 app.get('/api/delta/:c', auth, wrap(async (q, s) => {   // only records added since the last check
@@ -160,7 +166,7 @@ app.get('/api/delta/:c', auth, wrap(async (q, s) => {   // only records added si
   if (!d) fail(404, 'Unknown collection');
   if ((d[1] === 'm' && r === 'cashier') || (d[1] === 'a' && r !== 'admin')) return s.json({ docs: [], now });
   const docs = await d[0].find({ ...(q.params.c === 'custs' ? { co: q.u.co } : q.params.c === 'trf' ? tScope(q) : scope(q)), at: { $gt: Number(q.query.after) || 0 } }).select('-_id').sort({ at: 1 }).limit(3000).lean();
-  s.json({ docs, now, more: docs.length >= 3000, last: docs.length ? docs[docs.length - 1].at : 0 });
+  s.json({ docs: uniq(docs), now, more: docs.length >= 3000, last: docs.length ? docs[docs.length - 1].at : 0 });
 }));
 const COL2 = { prods: Prod, cats: Cat, expenses: Expense };
 app.get('/api/col/:c', auth, wrap(async (q, s) => {   // one whole collection (products, categories, expenses)
@@ -174,7 +180,7 @@ app.get('/api/monthly', auth, need('admin', 'manager'), wrap(async (q, s) => {  
   const match = { ...scope(q), ts: { $gte: Number(q.query.from), $lt: Number(q.query.to) } };
   if (q.query.br && q.query.br !== 'all') { if (!okBr(q, q.query.br)) fail(403, 'Not allowed'); match.br = q.query.br; }
   let rows;
-  try { rows = await Sale.aggregate([{ $match: match }, { $group: { _id: { $month: { date: { $toDate: '$ts' }, timezone: String(q.query.tz || 'UTC') } }, n: { $sum: 1 }, rev: { $sum: '$total' }, profit: { $sum: '$profit' } } }]); }
+  try { rows = await Sale.aggregate([{ $match: match }, { $group: { _id: '$id', ts: { $first: '$ts' }, total: { $first: '$total' }, profit: { $first: '$profit' } } }, { $group: { _id: { $month: { date: { $toDate: '$ts' }, timezone: String(q.query.tz || 'UTC') } }, n: { $sum: 1 }, rev: { $sum: '$total' }, profit: { $sum: '$profit' } } }]); }
   catch (e) { fail(400, 'Could not total the months'); }
   s.json({ months: rows.map(r => ({ m: r._id - 1, n: r.n, rev: r.rev, profit: r.profit })) });
 }));
@@ -190,9 +196,7 @@ app.put('/api/prods', auth, wrap(async (q, s) => {
 }));
 app.put('/api/sales', auth, wrap(async (q, s) => {   // append-only
   const co = q.u.co, a = clean(q.body, q);
-  const have = new Set((await Sale.find({ co, id: { $in: a.map(x => x.id) } }).select('id').lean()).map(x => x.id));
-  const n = a.filter(x => !have.has(x.id)).map(x => ({ ...x, by: q.u.name, at: Date.now() }));
-  if (n.length) await Sale.insertMany(n);
+  await insertOnce(Sale, a.map(x => ({ ...x, by: q.u.name, at: Date.now() })));
   s.json({ ok: 1 });
 }));
 
@@ -221,9 +225,7 @@ app.put('/api/expenses', auth, need('admin', 'manager'), wrap(async (q, s) => {
 }));
 const append = (path, Mo, roles) => app.put(path, auth, need(...roles), wrap(async (q, s) => {   // append-only records
   const co = q.u.co, a = clean(q.body, q);
-  const have = new Set((await Mo.find({ co, id: { $in: a.map(x => x.id) } }).select('id').lean()).map(x => x.id));
-  const n = a.filter(x => !have.has(x.id)).map(x => ({ ...x, by: q.u.name, at: Date.now() }));
-  if (n.length) await Mo.insertMany(n);
+  await insertOnce(Mo, a.map(x => ({ ...x, by: q.u.name, at: Date.now() })));
   s.json({ ok: 1 });
 }));
 append('/api/moves', Move, ['admin', 'manager', 'cashier']);
@@ -283,7 +285,7 @@ app.put('/api/lays', auth, wrap(async (q, s) => {   // layaways change over time
   s.json({ ok: 1 });
 }));
 app.get('/api/bals', auth, wrap(async (q, s) => {
-  const bl = await Ledger.aggregate([{ $match: { co: q.u.co } }, { $group: { _id: '$cid', bal: { $sum: '$amt' } } }]);
+  const bl = await Ledger.aggregate([{ $match: { co: q.u.co } }, { $group: { _id: '$id', cid: { $first: '$cid' }, amt: { $first: '$amt' } } }, { $group: { _id: '$cid', bal: { $sum: '$amt' } } }]);
   s.json({ bals: Object.fromEntries(bl.map(x => [x._id, Math.round(x.bal * 100) / 100])) });
 }));
 app.get('/api/ledger', auth, wrap(async (q, s) => {   // one customer's statement
@@ -368,17 +370,24 @@ app.post('/api/device', auth, wrap(async (q, s) => {   // each device gets a sma
   await Counter.updateOne(f, { $setOnInsert: { seq: 0 } }, { upsert: true });
   s.json({ dev: ((await Counter.findOneAndUpdate(f, { $inc: { seq: 1 } }, { new: true }).lean()).seq - 1) % 900 + 1 });
 }));
-const dupeGroups = co => Sale.aggregate([{ $match: { co, no: { $ne: null } } }, { $group: { _id: { br: '$br', no: '$no' }, n: { $sum: 1 } } }, { $match: { n: { $gt: 1 } } }, { $limit: 500 }]);
+const COPY_MODELS = [Sale, Move, Log, Refund, Ledger, Lay];
+const copyGroups = (Mo, co) => Mo.aggregate([{ $match: { co } }, { $group: { _id: '$id', n: { $sum: 1 }, keep: { $first: '$_id' }, all: { $push: '$_id' } } }, { $match: { n: { $gt: 1 } } }, { $limit: 5000 }]);
+async function removeCopies(co, dry) {   // the same record saved more than once: keep one, delete the rest
+  let n = 0;
+  for (const Mo of COPY_MODELS) for (const g of await copyGroups(Mo, co)) { const extra = g.all.filter(x => String(x) !== String(g.keep)); n += extra.length; if (!dry) await Mo.deleteMany({ _id: { $in: extra } }); }
+  return n;
+}
+const dupeGroups = co => Sale.aggregate([{ $match: { co, no: { $ne: null } } }, { $group: { _id: { br: '$br', no: '$no' }, ids: { $addToSet: '$id' } } }, { $match: { 'ids.1': { $exists: true } } }, { $limit: 500 }]);
 app.get('/api/dupes', auth, need('admin'), wrap(async (q, s) => {
-  const g = await dupeGroups(q.u.co); s.json({ groups: g.length, extra: g.reduce((a, x) => a + x.n - 1, 0) });
+  const g = await dupeGroups(q.u.co); s.json({ copies: await removeCopies(q.u.co, true), groups: g.length, extra: g.reduce((a, x) => a + x.ids.length - 1, 0) });
 }));
-app.post('/api/dupes/fix', auth, need('admin'), wrap(async (q, s) => {   // the oldest receipt keeps the number, the others get new ones
-  const co = q.u.co; let fixed = 0;
+app.post('/api/dupes/fix', auth, need('admin'), wrap(async (q, s) => {   // remove repeated copies, then give clashing receipt numbers to the later receipts (the oldest keeps its number)
+  const co = q.u.co, removed = await removeCopies(co); let fixed = 0;
   for (const x of await dupeGroups(co)) {
     const docs = await Sale.find({ co, br: x._id.br, no: x._id.no }).sort({ ts: 1 }).select('id').lean();
-    for (const d of docs.slice(1)) { await Sale.updateOne({ co, id: d.id }, { $set: { no: await nextSeq(co, x._id.br, 'rcpt'), oldNo: x._id.no } }); fixed++; }
+    for (const d of docs) if (d.id !== docs[0].id) { await Sale.updateOne({ co, id: d.id }, { $set: { no: await nextSeq(co, x._id.br, 'rcpt'), oldNo: x._id.no } }); fixed++; }
   }
-  s.json({ fixed });
+  await ensureIndexes(); s.json({ fixed, removed });
 }));
 
 // ---------- stock transfers between branches (the receiving branch accepts or declines) ----------
@@ -502,11 +511,13 @@ app.delete('/api/users/:id', auth, need('admin'), wrap(async (q, s) => {
   await User.deleteOne({ co: q.u.co, id: q.params.id }); s.json({ ok: 1 });
 }));
 
+const ensureIndexes = () => Promise.all([Sale, Move, Log, Refund, Ledger, Lay, Cust, Trf].map(Mo => Mo.collection.createIndex({ co: 1, id: 1 }, { unique: true }).catch(e => console.log('Index note (' + Mo.modelName + '): ' + e.message))));
+app.ensureIndexes = ensureIndexes;   // also used by the Netlify function
 module.exports = app;   // used by the Netlify function
 
 if (require.main === module) {   // normal `npm start` (Render, Railway, local)
   if (!SECRET || !process.env.MONGODB_URI) { console.error('Set MONGODB_URI and JWT_SECRET in .env'); process.exit(1); }
   mongoose.connect(process.env.MONGODB_URI)
-    .then(() => app.listen(process.env.PORT || 3000, () => console.log('POS running on port ' + (process.env.PORT || 3000))))
+    .then(() => { ensureIndexes(); return app.listen(process.env.PORT || 3000, () => console.log('POS running on port ' + (process.env.PORT || 3000))); })
     .catch(e => { console.error(e.message); process.exit(1); });
 }
