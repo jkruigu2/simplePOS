@@ -176,6 +176,21 @@ app.get('/api/col/:c', auth, wrap(async (q, s) => {   // one whole collection (p
   const f = { ...scope(q) }; if (q.params.c === 'expenses') f.ts = { $gte: Number(q.query.from) || 0 };
   s.json({ docs: await m.find(f).select('-_id').lean(), now });
 }));
+app.get('/api/series', auth, need('admin', 'manager'), wrap(async (q, s) => {   // sales, expenses and stock movements per week / month / year (for the stock report graphs)
+  const unit = ['week', 'month', 'year'].includes(q.query.bucket) ? q.query.bucket : 'month', tz = String(q.query.tz || 'UTC');
+  const f = { ...scope(q) }, rng = { ts: { $gte: Number(q.query.from) || 0, $lt: Number(q.query.to) || Date.now() + 1 } };
+  if (q.query.br && q.query.br !== 'all') { if (!okBr(q, q.query.br)) fail(403, 'Not allowed'); f.br = q.query.br; }
+  const bk = d => ({ $toLong: { $dateTrunc: { date: { $toDate: d }, unit, timezone: tz, startOfWeek: 'monday' } } });
+  let sales, exp, flow, first;
+  try {
+    [sales, exp, flow, first] = await Promise.all([
+      Sale.aggregate([{ $match: { ...f, ...rng } }, { $group: { _id: '$id', ts: { $first: '$ts' }, total: { $first: '$total' }, profit: { $first: '$profit' } } }, { $group: { _id: bk('$ts'), n: { $sum: 1 }, rev: { $sum: '$total' }, profit: { $sum: '$profit' } } }]),
+      Expense.aggregate([{ $match: { ...f, ...rng } }, { $group: { _id: bk('$ts'), amt: { $sum: '$amt' } } }]),
+      Move.aggregate([{ $match: { ...f, ...rng } }, { $group: { _id: '$id', ts: { $first: '$ts' }, pid: { $first: '$pid' }, qty: { $first: '$qty' } } }, { $group: { _id: { b: bk('$ts'), pid: '$pid' }, d: { $sum: '$qty' } } }]),
+      Move.find(f).sort({ ts: 1 }).limit(1).select('ts').lean()]);
+  } catch (e) { fail(400, 'Could not work out the trend.'); }
+  s.json({ sales: sales.map(x => ({ b: x._id, n: x.n, rev: x.rev, profit: x.profit })), exp: exp.map(x => ({ b: x._id, amt: x.amt })), flow: flow.map(x => ({ b: x._id.b, pid: x._id.pid, d: x.d })), firstMove: first.length ? first[0].ts : null });
+}));
 app.get('/api/monthly', auth, need('admin', 'manager'), wrap(async (q, s) => {   // sales totals per month, worked out by the database
   const match = { ...scope(q), ts: { $gte: Number(q.query.from), $lt: Number(q.query.to) } };
   if (q.query.br && q.query.br !== 'all') { if (!okBr(q, q.query.br)) fail(403, 'Not allowed'); match.br = q.query.br; }
