@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const app = require('../../server');
 const run = serverless(app);
 
-let conn;   // reuse the database connection between requests
+let conn;   //reuse the database connection between requests
 const connect = () => conn || (conn = mongoose
   .connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 })
   .then(r => { try { if (app.ensureIndexes) app.ensureIndexes(); } catch (e) { console.log('Index setup skipped: ' + e.message); } return r; })   // fail fast instead of hanging
