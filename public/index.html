@@ -193,9 +193,12 @@ function flushQ(){   // only one sender at a time (before, several timers could 
     while(true){
       const q=load('pos3_q',[]);if(!q.length)return true;
       const sent=JSON.parse(JSON.stringify(q[0]));
-      try{await raw(sent.m,sent.p,sent.b)}catch(x){if(x.net||x.sub)return false;toast(x.message,'err')}
+      if(sent.op&&!q[0].tried){q[0].tried=true;try{localStorage.setItem('pos3_q',JSON.stringify(q))}catch(x){}}
+      try{await raw(sent.m,sent.op?sent.p+'?op='+sent.op:sent.p,sent.b)}catch(x){if(x.net||x.sub)return false;toast(x.message,'err');resync=true}
       // take out only what was sent: changes made while we were sending stay in the queue
-      const cur=load('pos3_q',[]),i=cur.findIndex(y=>y.p===sent.p&&y.m===sent.m);
+      const cur=load('pos3_q',[]);
+      if(sent.op){const j=cur.findIndex(y=>y.op===sent.op);if(j>=0)cur.splice(j,1);try{localStorage.setItem('pos3_q',JSON.stringify(cur))}catch(x){}continue}
+      const i=cur.findIndex(y=>y.p===sent.p&&y.m===sent.m);
       if(i>=0){
         if(APPEND.includes(sent.p)||UPS.includes(sent.p)){const old=new Map(sent.b.map(x=>[x.id,JSON.stringify(x)]));cur[i].b=cur[i].b.filter(x=>!old.has(x.id)||old.get(x.id)!==JSON.stringify(x));if(!cur[i].b.length)cur.splice(i,1)}
         else if(JSON.stringify(cur[i].b)===JSON.stringify(sent.b))cur.splice(i,1);
@@ -214,18 +217,43 @@ async function api(m,p,b,quiet,queue){if(!quiet)busy(true,m);
     try{return await raw(m,p,b)}catch(e){if((e.net||e.sub)&&queue){enqueue(m,p,b);return{queued:1}}throw e}}
   finally{if(!quiet)busy(false)}}
 const ROUTE={[K.g]:'cats',[K.p]:'prods',[K.l]:'sales',[K.e]:'expenses'};
-const save=(k,v)=>{if(ROUTE[k]){api('PUT','/api/'+ROUTE[k],k===K.l?v.slice(-1):v,false,true).catch(e=>toast(e.message,'err'));cacheState()}else try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+// Products, categories and expenses are saved as CHANGES. SYN remembers what has already been handed to the server (by id, as text),
+// so a save sends only the items that differ, a stock change is sent as "was -> now" (the server adds the difference, so another phone's
+// restock is never overwritten), and a delete is an explicit request. A list that is out of date can no longer wipe the others.
+const SYN={};let EP=0,resync=false;   // EP counts local saves: a refresh that was asked for before a save is out of date and is ignored
+const synFrom=(k,a)=>{const m=new Map();(a||[]).forEach(x=>{if(x&&x.id)m.set(x.id,JSON.stringify(x))});SYN[k]=m};
+const resyn=()=>{synFrom(K.p,prods);synFrom(K.g,cats);synFrom(K.e,expenses)};
+function mergeDoc(o,n){const r={...n};if(o._bs!==undefined)r._bs=o._bs;   // two changes to one product that have not been sent yet become one: from the oldest "was" to the newest "now"
+  if(o._sa||o._sr||n._sa||n._sr){const sa=new Set([...(o._sa||[]),...(n._sa||[])]),sr=new Set([...(o._sr||[]),...(n._sr||[])]);[...sa].forEach(z=>{if(sr.has(z)){sa.delete(z);sr.delete(z)}});r._sa=[...sa];r._sr=[...sr]}return r}
+function enqueueDocs(e){const q=load('pos3_q',[]),m=e.tried?null:q.slice().reverse().find(x=>x.m==='PUT'&&x.p===e.p&&x.op&&!x.tried);
+  if(!m)q.push(e);else e.b.forEach(x=>{const i=m.b.findIndex(y=>y.id===x.id);if(i<0)m.b.push(x);else m.b[i]=mergeDoc(m.b[i],x)});
+  try{localStorage.setItem('pos3_q',JSON.stringify(q))}catch(x){}}
+async function sendDocs(p,b){const e={m:'PUT',p,b,op:uid()};   // every send has an id: if the connection drops and it is sent again, the server counts it once
+  if(!navigator.onLine||pend()){enqueueDocs(e);if(navigator.onLine)flushQ();return}
+  try{await raw('PUT',p+'?op='+e.op,b)}catch(x){if(x.net||x.sub){e.tried=true;enqueueDocs(e);return}throw x}}
+const save=(k,v)=>{
+  if(k===K.l){api('PUT','/api/sales',v.slice(-1),false,true).catch(e=>toast(e.message,'err'));cacheState();return}
+  if(!ROUTE[k]){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}return}
+  EP++;const p='/api/'+ROUTE[k],base=SYN[k]||(SYN[k]=new Map()),ch=[],ids=new Set();
+  v.forEach(x=>{if(!x||!x.id)return;ids.add(x.id);const t=JSON.stringify(x);if(base.get(x.id)===t)return;
+    const d={...x};if(k===K.p&&base.has(x.id)){const o=JSON.parse(base.get(x.id));d._bs=Number(o.stock)||0;if(x.sns||o.sns){const bs=new Set(o.sns||[]),cs=new Set(x.sns||[]);d._sa=[...cs].filter(z=>!bs.has(z));d._sr=[...bs].filter(z=>!cs.has(z))}}
+    ch.push(d);base.set(x.id,t)});
+  const gone=[...base.keys()].filter(id=>!ids.has(id));gone.forEach(id=>base.delete(id));
+  const bad=e=>{toast(e.message,'err');resync=true};
+  if(ch.length)sendDocs(p,ch).catch(bad);
+  gone.forEach(id=>api('DELETE',p+'/'+id,null,true,true).catch(bad));
+  cacheState()};
 const uq=a=>{const k=new Set();return a.filter(x=>x&&!k.has(x.id)&&k.add(x.id))};
 async function boot(q){
   await flushQ();
-  if(pend()){if(!cats.length&&!prods.length){const c=load('pos3_cache',null);if(c)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs=[],lays=[],bals={},subinfo=null,trf=[],bnames=[],session}=c),lastSync=c.sync||lastSync}return}
-  try{const r=await api('GET','/api/data?days=35',null,q);
+  if(pend()){if(!cats.length&&!prods.length){const c=load('pos3_cache',null);if(c)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs=[],lays=[],bals={},subinfo=null,trf=[],bnames=[],session}=c),lastSync=c.sync||lastSync;resyn()}return}
+  const ep=EP;try{const r=await api('GET','/api/data?days=35',null,q);if(ep!==EP)return;
     const wn=r.win||0,keep=(a,w)=>loadedFrom!==null&&loadedFrom<w?a.filter(x=>x.ts<w):[];   // older records loaded earlier are kept (no window = everything was sent)
     const oS=keep(sales,wn),oR=keep(rets,wn),oE=keep(expenses,wn);
     cos=[r.company];users=r.users;cats=r.cats;prods=r.prods;branches=r.branches||[];custs=r.custs||[];lays=uq(r.lays||[]);bals=r.bals||{};subinfo=r.subinfo||null;trf=r.trf||[];bnames=r.bnames||[];moves=uq(r.moves||[]);logs=uq(r.logs||[]);session=r.me;
     sales=uq([...r.sales,...oS]);rets=uq([...(r.rets||[]),...oR]);expenses=uq([...(r.expenses||[]),...oE]);
-    loadedFrom=loadedFrom===null?wn:Math.min(loadedFrom,wn);ver=r.v||{};['sales','moves','logs','rets','lays','custs','trf'].forEach(k=>syncAt[k]=r.now);lastSync=Date.now();cacheState();ensureDev()}
-  catch(e){const c=load('pos3_cache',null);if(e.net&&c&&token)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs=[],lays=[],bals={},subinfo=null,trf=[],bnames=[],session}=c),lastSync=c.sync||lastSync;else throw e}}
+    resyn();loadedFrom=loadedFrom===null?wn:Math.min(loadedFrom,wn);ver=r.v||{};['sales','moves','logs','rets','lays','custs','trf'].forEach(k=>syncAt[k]=r.now);lastSync=Date.now();cacheState();ensureDev()}
+  catch(e){const c=load('pos3_cache',null);if(e.net&&c&&token)({cos,users,cats,prods,sales,expenses,moves,logs,rets,branches,custs=[],lays=[],bals={},subinfo=null,trf=[],bnames=[],session}=c),lastSync=c.sync||lastSync,resyn();else throw e}}
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const CUR=()=>{try{return (C&&C.cur)||'$'}catch(e){return '$'}};
 const nf=n=>(Number(n)||0).toLocaleString('en-US');
@@ -360,18 +388,19 @@ const TZ=(()=>{try{return Intl.DateTimeFormat().resolvedOptions().timeZone}catch
 const monKey=()=>yr+'|'+curBr;
 async function pollSync(){   // every 30s: one tiny request; fetch only what changed
   await flushQ();if(pend())return;
+  if(resync){resync=false;await boot(true);return render()}   // a save was refused: start again from what the server has
   const r=await api('GET','/api/ver',null,true),nv=r.v||{},ch=Object.keys(nv).filter(k=>(nv[k]||0)!==(ver[k]||0));
   lastSync=Date.now();
   if(!ch.length)return;
-  const n0=incoming().length;
+  const n0=incoming().length,stale=[];
   if(ch.some(k=>k==='org'||k==='salesx')){await boot(true);return render()}
   for(const k of ch){
     if(['sales','moves','logs','rets','lays','custs','trf'].includes(k)){const A={sales,moves,logs,rets,lays,custs,trf}[k];let after=(syncAt[k]||0)-10000,more=true;
       while(more){const d=await api('GET','/api/delta/'+k+'?after='+after,null,true),ids=new Set(A.map(x=>x.id));d.docs.forEach(x=>{if(!ids.has(x.id))A.push(x);else if(k==='lays'||k==='custs'||k==='trf')A[A.findIndex(y=>y.id===x.id)]=x});more=d.more;after=d.last;if(!more)syncAt[k]=d.now}}
     else if(k==='photos'){await loadPhotos()}
     else if(k==='ledger'){const d=await api('GET','/api/bals',null,true);bals=d.bals||{}}
-    else{const d=await api('GET','/api/col/'+k+'?from='+(loadedFrom||0),null,true),A={prods,cats,expenses}[k];A.splice(0,A.length,...d.docs)}}
-  if(incoming().length>n0)toast('You have a new incoming stock transfer');ver=nv;cacheState();render()}
+    else{const ep=EP,d=await api('GET','/api/col/'+k+'?from='+(loadedFrom||0),null,true),A={prods,cats,expenses}[k];if(ep!==EP||!Array.isArray(d.docs))stale.push(k);else{A.splice(0,A.length,...d.docs);synFrom({prods:K.p,cats:K.g,expenses:K.e}[k],A)}}}
+  if(incoming().length>n0)toast('You have a new incoming stock transfer');ver=nv;stale.forEach(k=>{ver[k]=-1});cacheState();render()}
 const needFromTs=()=>{const D=x=>new Date(x+'T00:00').getTime();if(rtab==='overview')return Date.now()-(7*(wk+1)+1)*864e5;if(rtab==='monthly')return Infinity;
   if(rtab==='trends'){if(!from)return Date.now()-62*864e5;const a=D(from),b=to?D(to):Date.now(),n=Math.round((b-a)/864e5)+1;return a-n*864e5}
   return from?D(from):0};
@@ -565,6 +594,44 @@ function rcptText(s){const o=RC(),no=s.no>=100000?rn(s.no):String(s.no).padStart
   (s.pays||[]).forEach(p=>L.push((p.m==='Credit'?'On credit: ':'Paid '+p.m+(p.ref?' #'+p.ref:'')+': ')+money(p.amt)));
   if(s.change>0)L.push('Change: '+money(s.change));
   L.push('');L.push((o&&o.foot)||'Thank you for shopping with us!');return L.join('\n')}
+const waMode=()=>localStorage.getItem('pos3_wamode')||'img';
+const rno=s=>s.no>=100000?rn(s.no):String(s.no).padStart(5,'0');
+const imgCache={};
+const loadImg=src=>new Promise(res=>{if(!src)return res(null);if(imgCache[src])return res(imgCache[src]);const im=new Image();im.onload=()=>{imgCache[src]=im;res(im)};im.onerror=()=>res(null);im.src=src});
+async function receiptBlob(s){   // the receipt drawn as a picture (same content as the printed one)
+  const o=RC(),W=420,P=22,SC=2,F='"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif',m=document.createElement('canvas').getContext('2d'),ops=[],im=o.logo?await loadImg(rlogo(o)):null;let y=P;
+  const wrap=(t,f,mw)=>{m.font=f;const out=[];let cur='';String(t).split(' ').forEach(w=>{const x=cur?cur+' '+w:w;if(m.measureText(x).width>mw&&cur){out.push(cur);cur=w}else cur=x});out.push(cur);return out};
+  const center=(t,sz,w,col,it)=>{const f=(it?'italic ':'')+w+' '+sz+'px '+F;wrap(t,f,W-2*P).forEach(l=>{ops.push({t:'t',s:l,x:W/2,y:y+sz,f,al:'center',c:col||'#111'});y+=Math.round(sz*1.4)})};
+  const lr=(l,r,sz,w,col)=>{const f=w+' '+sz+'px '+F;m.font=f;const rw=r?m.measureText(r).width:0,ls=wrap(l,f,W-2*P-rw-12);ls.forEach((x,i)=>{ops.push({t:'t',s:x,x:P,y:y+sz,f,al:'left',c:col||'#111'});if(i===0&&r)ops.push({t:'t',s:r,x:W-P,y:y+sz,f,al:'right',c:col||'#111'});y+=Math.round(sz*1.4)})};
+  const sub=(t,sz)=>{const f='400 '+sz+'px '+F;wrap(t,f,W-2*P-90).forEach(l=>{ops.push({t:'t',s:l,x:P,y:y+sz,f,al:'left',c:'#666'});y+=Math.round(sz*1.4)})};
+  const rule=()=>{y+=6;ops.push({t:'r',y});y+=12};
+  if(im){const k=Math.min(1,190/im.width,64/im.height),w=im.width*k,h=im.height*k;ops.push({t:'i',im,x:(W-w)/2,y,w,h,bw:o.bw});y+=h+8}
+  center(C.name,21,700);center([C.loc,o.branch&&branches.length>1?brName(s.br):''].filter(Boolean).join(' · '),14,400,'#444');if(C.phone)center('Tel: '+C.phone,14,400,'#444');
+  if(o.head)String(o.head).split('\n').forEach(l=>center(l,14,400,'#444'));
+  rule();
+  lr('Receipt #'+rno(s),'',15,600);lr(new Date(s.ts).toLocaleString(),'',14,400,'#444');
+  if(o.cashier)lr('Cashier: '+s.by,'',14,400,'#444');if(o.pay)lr('Payment: '+(s.pay||'Cash'),'',14,400,'#444');
+  if(o.customer&&s.cust){if(s.cust.name)lr('Customer: '+s.cust.name,'',14,400,'#444');if(s.cust.phone)lr('Tel: '+s.cust.phone,'',14,400,'#444');if(s.cust.note)lr('Note: '+s.cust.note,'',14,400,'#444')}
+  rule();
+  s.items.forEach(i=>{lr(nf(i.qty)+' × '+i.name,money(i.qty*i.price),15,500);if(i.sn)sub('S/N: '+i.sn,13);sub('@ '+money(i.price),13);y+=4});
+  rule();
+  if(s.disc>0){lr('Subtotal',money(s.sub),15,400);lr('Discount','-'+money(s.disc),15,400)}
+  lr('TOTAL',money(s.total),19,700);
+  if(o.pay&&s.pays){s.pays.forEach(p=>lr(p.m+(p.ref?' #'+p.ref:''),money(p.amt),15,400));if(s.change>0)lr('Change',money(s.change),15,400)}
+  if(s.cr>0)lr('Balance owed',money(s.balAfter||0),16,700,'#b42318');
+  rule();
+  if(o.motto&&C.motto)center(C.motto,14,400,'#444',true);if(o.foot)String(o.foot).split('\n').forEach(l=>center(l,14,400,'#444'));
+  const H=Math.ceil(y+P),cv=document.createElement('canvas');cv.width=W*SC;cv.height=H*SC;const g=cv.getContext('2d');g.scale(SC,SC);g.fillStyle='#fff';g.fillRect(0,0,W,H);g.textBaseline='alphabetic';
+  ops.forEach(p=>{if(p.t==='t'){g.font=p.f;g.fillStyle=p.c;g.textAlign=p.al;g.fillText(p.s,p.x,p.y)}else if(p.t==='r'){g.strokeStyle='#bbb';g.setLineDash([4,4]);g.beginPath();g.moveTo(P,p.y);g.lineTo(W-P,p.y);g.stroke();g.setLineDash([])}else{if(p.bw)g.filter='grayscale(1) contrast(1.3)';g.drawImage(p.im,p.x,p.y,p.w,p.h);g.filter='none'}});
+  return new Promise((res,rej)=>cv.toBlob(b=>b?res(b):rej(Error('Could not make the picture')),'image/png'))}
+async function shareReceipt(sl){
+  let blob;try{blob=await receiptBlob(sl)}catch(e){return toast('Could not make the receipt picture','err')}
+  const f=new File([blob],'receipt-'+rno(sl)+'.png',{type:'image/png'});
+  if(navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f],title:C.name+' receipt',text:C.name+' receipt '+rno(sl)});return}catch(e){if(e&&e.name==='AbortError')return}}
+  const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=f.name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),4000);   // this browser cannot share a picture directly: save it, then open the chat so it can be attached
+  const ph=sl.cust&&sl.cust.phone;if(ph&&waNum(ph))waOpen(ph,C.name+' receipt '+rno(sl)+' (picture attached)');
+  toast('Receipt picture saved. Attach it in WhatsApp.')}
+function sendReceiptText(sl){const ph=sl.cust&&sl.cust.phone;if(ph&&waNum(ph)){if(!waOpen(ph,rcptText(sl)))toast('That number does not look right','warn');return}rc=null;md='waphone';mdx=sl.id;render()}
 // ---- trash bin ----
 let trashItems=null,trashBusy=false;
 async function ensureTrash(){if(tab!=='trash'||!token||!navigator.onLine||trashItems!==null||trashBusy)return;trashBusy=true;try{trashItems=(await api('GET','/api/trash',null,true)).items||[]}catch(e){trashItems=[]}trashBusy=false;render()}
@@ -815,7 +882,7 @@ function reportView(){
   else if(rtab==='monthly')body=`<div class="card"><div class="row"><h2 style="margin:0">Monthly sales graph</h2><div><button data-act="yr" data-id="-1">‹</button> <b>${yr}</b> <button data-act="yr" data-id="1" ${yr>=new Date().getFullYear()?'disabled':''}>›</button></div></div>
   <small class="mut">Revenue ${money(yR)} · profit ${money(yP)} · <span style="color:var(--pri)">■</span> sales <span style="color:var(--warn)">■</span> profit</small>${chartM(mons)}
   <div class="tblw" style="margin-top:8px"><table class="nt"><tr><th>Month</th><th class="r">Sales</th><th class="r">Revenue</th><th class="r">Profit</th></tr>${mons.map(m=>`<tr><td>${MN[m.m]} ${yr}</td><td class="r">${nf(m.n)}</td><td class="r">${money(m.rev)}</td><td class="r">${pc(m.profit)}</td></tr>`).join('')}<tfoot><tr><td>${yr} total</td><td class="r">${nf(mons.reduce((x,m)=>x+m.n,0))}</td><td class="r">${money(yR)}</td><td class="r">${pc(yP)}</td></tr></tfoot></table></div></div>`;
-  else if(rtab==='sales')body=period(true)+`<div class="card"><h2>Transactions${list.length>2000?' <small class="mut">(newest 2,000 of '+nf(list.length)+' shown; narrow the period or export CSV)</small>':''}</h2><div class="tblw">${list.length?`<table><tr><th>#</th><th>Date</th><th>Customer</th><th>Cashier</th><th>Branch</th><th>Payment</th><th class="r">Items</th>${hasD?'<th class="r">Discount</th>':''}<th class="r">Total</th><th class="r">Profit</th><th></th></tr>${list.slice(0,2000).map(s=>`<tr><td data-v="${s.no}">${rn(s.no)}${rfOf(s.id)?'<br><small class="neg">Refunded '+money(rfOf(s.id))+'</small>':''}</td><td data-v="${s.ts}">${new Date(s.ts).toLocaleString()}</td><td>${s.cust?esc((s.cust.name||'')+(s.cust.phone?' · '+s.cust.phone:''))+(s.cust.note?'<br><small class="mut">'+esc(s.cust.note)+'</small>':''):'—'}</td><td>${esc(s.by)}</td><td>${esc(brName(s.br))}</td><td>${esc(s.pay||'Cash')}${(s.pays||[]).some(p=>p.ref)?'<br><small class="mut">'+esc(s.pays.filter(p=>p.ref).map(p=>p.ref).join(', '))+'</small>':''}</td><td class="r">${s.items.reduce((x,i)=>x+i.qty,0)}</td>${hasD?`<td class="r">${s.disc>0?'-'+money(s.disc):'—'}</td>`:''}<td class="r">${money(s.total)}</td><td class="r">${pc(s.profit)}</td><td style="white-space:nowrap">${acts(`<button data-act="rcpt" data-id="${s.id}">Receipt</button>`,'Receipt '+rn(s.no),[{l:'Send on WhatsApp',a:'wasend',id:s.id},{l:'Edit details',a:'open',id:'sedit',x:s.id},{l:'Refund',a:'open',id:'refund',x:s.id},{l:'Change date',a:'open',id:'sdate',x:s.id},{l:'Delete receipt',a:'delrcpt',id:s.id,c:'del'}])}</td></tr>`).join('')}<tfoot><tr><td colspan="6">Total (${nf(list.length)} sales)</td><td class="r">${nf(items)}</td>${hasD?`<td class="r">-${money(disc)}</td>`:''}<td class="r">${money(r.rev)}</td><td class="r">${pc(r.profit)}</td><td></td></tr></tfoot></table>`:'<p class="mut">No sales in range.</p>'}</div></div>`;
+  else if(rtab==='sales')body=period(true)+`<div class="card"><h2>Transactions${list.length>2000?' <small class="mut">(newest 2,000 of '+nf(list.length)+' shown; narrow the period or export CSV)</small>':''}</h2><div class="tblw">${list.length?`<table><tr><th>#</th><th>Date</th><th>Customer</th><th>Cashier</th><th>Branch</th><th>Payment</th><th class="r">Items</th>${hasD?'<th class="r">Discount</th>':''}<th class="r">Total</th><th class="r">Profit</th><th></th></tr>${list.slice(0,2000).map(s=>`<tr><td data-v="${s.no}">${rn(s.no)}${rfOf(s.id)?'<br><small class="neg">Refunded '+money(rfOf(s.id))+'</small>':''}</td><td data-v="${s.ts}">${new Date(s.ts).toLocaleString()}</td><td>${s.cust?esc((s.cust.name||'')+(s.cust.phone?' · '+s.cust.phone:''))+(s.cust.note?'<br><small class="mut">'+esc(s.cust.note)+'</small>':''):'—'}</td><td>${esc(s.by)}</td><td>${esc(brName(s.br))}</td><td>${esc(s.pay||'Cash')}${(s.pays||[]).some(p=>p.ref)?'<br><small class="mut">'+esc(s.pays.filter(p=>p.ref).map(p=>p.ref).join(', '))+'</small>':''}</td><td class="r">${s.items.reduce((x,i)=>x+i.qty,0)}</td>${hasD?`<td class="r">${s.disc>0?'-'+money(s.disc):'—'}</td>`:''}<td class="r">${money(s.total)}</td><td class="r">${pc(s.profit)}</td><td style="white-space:nowrap">${acts(`<button data-act="rcpt" data-id="${s.id}">Receipt</button>`,'Receipt '+rn(s.no),[{l:'Send on WhatsApp',a:'wasend',id:s.id},{l:waMode()==='img'?'Send as text instead':'Send as picture instead',a:'wasend2',id:s.id},{l:'Edit details',a:'open',id:'sedit',x:s.id},{l:'Refund',a:'open',id:'refund',x:s.id},{l:'Change date',a:'open',id:'sdate',x:s.id},{l:'Delete receipt',a:'delrcpt',id:s.id,c:'del'}])}</td></tr>`).join('')}<tfoot><tr><td colspan="6">Total (${nf(list.length)} sales)</td><td class="r">${nf(items)}</td>${hasD?`<td class="r">-${money(disc)}</td>`:''}<td class="r">${money(r.rev)}</td><td class="r">${pc(r.profit)}</td><td></td></tr></tfoot></table>`:'<p class="mut">No sales in range.</p>'}</div></div>`;
   else if(rtab==='profit')body=period(false)+`<div class="card"><h2>Summary</h2><div class="tblw"><table class="nt"><tr><th>Item</th><th class="r">Value</th></tr>
    <tr><td>Sales</td><td class="r">${nf(list.length)}</td></tr><tr><td>Items sold</td><td class="r">${nf(items)}</td></tr>${hasD?`<tr><td>Subtotal</td><td class="r">${money(sub)}</td></tr><tr><td>Discounts given</td><td class="r">-${money(disc)}</td></tr>`:''}
    <tr><td>Revenue</td><td class="r">${money(r.rev)}</td></tr><tr><td>Cost of goods</td><td class="r">${money(r.rev-r.profit)}</td></tr><tr><td>Refunds</td><td class="r">-${money(rfA)}</td></tr><tr><td>Profit after refunds</td><td class="r">${pc(r.profit-rfP)}</td></tr><tr><td>Expenses</td><td class="r">-${money(exA)}</td></tr><tfoot><tr><td>Net profit</td><td class="r">${pc(r.profit-rfP-exA)}</td></tr></tfoot></table></div></div>
@@ -915,7 +982,7 @@ function mdView(){
   if(md==='catedit'){const c=cats.find(x=>x.id===mdx)||{};t='Edit category';b=`<label>Category name</label><input name="name" value="${esc(c.name||'')}" required autofocus>${xin(FLD('cat'),c.ext||{})}`}
   if(md==='prodedit'){const p=prods.find(x=>x.id===mdx)||{};t='Edit product';b=`<label>Product name</label><input name="name" value="${esc(p.name||'')}" required autofocus><label>Category</label><select name="cat">${bmine(cats).map(c=>`<option value="${c.id}" ${c.id===p.cat?'selected':''}>${esc(tc(c.name))}</option>`).join('')}</select><label>Barcode</label><div class="pw"><input id="pcode" name="code" value="${esc(p.code||'')}" autocomplete="off"><button type="button" data-act="scanfield" data-id="pcode" aria-label="Scan barcode">${CAM}</button></div><div class="row"><div><label>Buying price</label><input name="buy" type="number" min="0" step="0.01" value="${p.buy}" required></div><div><label>Selling price</label><input name="price" type="number" min="0" step="0.01" value="${p.price}" required></div></div><p class="mut" style="margin:0 0 8px">${p.ser?'Serial tracking is on ('+nf((p.sns||[]).length)+' units in stock).':'Serial tracking is off.'}</p>${xin(FLD('prod'),p.ext||{})}`}
   if(md==='waphone'){t='Send receipt on WhatsApp';b=`<label>Customer's WhatsApp number</label><div class="pw"><input name="phone" type="tel" required autofocus placeholder="0712 345 678">${CONTACTBTN('','input[name=phone]')}</div><label class="chk"><input type="checkbox" name="save" checked> Save this number on the receipt</label>`}
-  if(md==='wacfg'){t='WhatsApp settings';b=`<label>Your country code</label><input name="cc" value="${esc(CC())}" inputmode="numeric" required><p class="mut" style="margin:0">Numbers that start with 0 get this code put in front (Kenya is 254). Numbers that already start with + or the country code are left as they are. This setting is for this phone.</p>`}
+  if(md==='wacfg'){t='WhatsApp settings';b=`<label>Send receipts as</label><select name="mode"><option value="img" ${waMode()==='img'?'selected':''}>A picture of the receipt</option><option value="txt" ${waMode()==='txt'?'selected':''}>Text</option></select><label>Your country code</label><input name="cc" value="${esc(CC())}" inputmode="numeric" required><p class="mut" style="margin:0">Numbers that start with 0 get this code put in front (Kenya is 254). Numbers that already start with + or the country code are left as they are. These settings are for this phone. A picture opens your phone's share sheet: choose WhatsApp, then the customer. (WhatsApp cannot pick the customer for a picture automatically.)</p>`}
   if(md==='recview'){t='Show recovery code';b=`<p class="mut" style="margin-top:0">Type your admin password to see the recovery code. It is the only way to reset a forgotten admin password, so keep it somewhere safe.</p><label>Admin password</label>${PWF('pass')}`}
   if(md==='snedit'){const p=prods.find(x=>x.id===mdx);if(!p||!p.ser)return '';t='Edit units · '+dn(p);b=`<p class="mut" style="margin-top:0">${nf((p.sns||[]).length)} units in stock. Tick units to remove them, and/or add new units below.</p><div class="tblw" style="max-height:30vh;overflow:auto"><table class="nt">${(p.sns||[]).map((sn,i)=>`<tr><td><input type="checkbox" name="r_${i}" value="${esc(sn)}"></td><td>${esc(sn)}</td></tr>`).join('')||'<tr><td>No units in stock.</td></tr>'}</table></div><label>Add serial numbers / IMEIs (one per line)</label><textarea name="sns" rows="3"></textarea><label>Reason</label><select name="why">${['Count correction','Damaged','Lost or stolen','Other'].map(x=>`<option>${x}</option>`).join('')}</select>`}
   if(md==='sedit'){const sl=sales.find(x=>x.id===mdx)||{},c=sl.cust||{};t='Edit receipt #'+rn(sl.no||0);b=`<label>Customer name</label><input name="name" value="${esc(c.name||'')}"><label>Customer phone</label><input name="phone" type="tel" value="${esc(c.phone||'')}"><label>Note</label><input name="note" value="${esc(c.note||'')}">${(sl.pays||[]).map((p,i)=>p.m==='Credit'?`<p class="mut" style="margin:6px 0">Payment ${i+1}: ${money(p.amt)} on account (cannot be changed here)</p>`:`<div class="row" style="gap:8px;align-items:flex-start"><div style="flex:1"><label>Payment ${i+1}: ${money(p.amt)}</label><select name="m${i}">${PAY.filter(x=>x[0]!=='Credit').map(x=>`<option ${x[0]===p.m?'selected':''}>${x[0]}</option>`).join('')}</select></div><div style="flex:1"><label>Transaction code</label><input name="r${i}" value="${esc(p.ref||'')}"></div></div>`).join('')}<p class="mut" style="margin-bottom:0">Items and amounts cannot be changed here. To correct them, refund or delete the receipt.</p>`}
@@ -960,7 +1027,7 @@ document.addEventListener('submit',async e=>{
     return ask('Save changes to "'+dn(p)+'"?',()=>{const old=dn(p);p.name=n;p.cat=d.cat;p.code=code;if(+d.buy!==p.buy)ph(p,'buy',p.buy,+d.buy);if(+d.price!==p.price)ph(p,'price',p.price,+d.price);p.buy=+d.buy;p.price=+d.price;p.ext=xval(d,FLD('prod'));save(K.p,prods);audit('Product edited',old===dn(p)?old:old+' to '+dn(p));md='cprods';mdx=p.cat;toast('Product updated')})}
   if(k==='waphone'){const sl=sales.find(x=>x.id===mdx);if(!sl)return;const ok=waOpen(d.phone,rcptText(sl));if(!ok)return toast('That number does not look right','warn');
     if(d.save){sl.cust={...(sl.cust||{}),phone:d.phone};try{await api('PATCH','/api/sales/'+sl.id,{cust:sl.cust})}catch(x){}}md=null;return render()}
-  if(k==='wacfg'){localStorage.setItem('pos3_cc',String(d.cc).replace(/\D/g,'')||'254');md=null;toast('Saved');return render()}
+  if(k==='wacfg'){localStorage.setItem('pos3_cc',String(d.cc).replace(/\D/g,'')||'254');localStorage.setItem('pos3_wamode',d.mode==='txt'?'txt':'img');md=null;toast('Saved');return render()}
   if(k==='fld'&&can('products')){const n=(d.name||'').trim();if(!n)return toast('Enter a column name','warn');const fl=[...(C.fields||[])];
     if(fl.some(f=>f.t===d.t&&f.name.toLowerCase()===n.toLowerCase()))return toast('That column already exists','warn');
     return ask('Add the column "'+n+'" to '+(d.t==='prod'?'products':'categories')+'?',async()=>{fl.push({id:'f'+uid(),t:d.t,name:n,type:d.type});const r=await api('PATCH','/api/company/fields',{fields:fl});C.fields=r.fields;cacheState();audit('Custom column added',n);toast('Column added')})}
@@ -1185,7 +1252,7 @@ document.addEventListener('click',e=>{
   if(a==='unarch'&&can('products')){const pp=prods.find(x=>x.id===id);if(!pp)return;pp.arch=false;save(K.p,prods);audit('Product restored from archive',dn(pp));toast('Restored: '+dn(pp))}
   if(a==='pdel'&&can('products')){if(!navigator.onLine)return toast('Photos need an internet connection','warn');api('DELETE','/api/photo/'+id).then(()=>{delete PH[id];delete PHB[id];savePH();toast('Photo removed');render()}).catch(x=>toast(x.message,'err'));return}
   if(a==='pzoom'){if(!PH[id])return;md='pzoom';mdx=id;if(!PHB[id]&&navigator.onLine)api('GET','/api/photo/'+id,null,true).then(r=>{if(r.big){PHB[id]=r.big;render()}}).catch(()=>{})}
-  if(a==='wasend'){const sl=sales.find(x=>x.id===id);if(!sl)return;const ph=sl.cust&&sl.cust.phone;if(ph&&waNum(ph)){if(!waOpen(ph,rcptText(sl)))toast('That number does not look right','warn');return}rc=null;md='waphone';mdx=id}
+  if(a==='wasend'||a==='wasend2'){const sl=sales.find(x=>x.id===id);if(!sl)return;const pic=waMode()==='img'?a==='wasend':a==='wasend2';if(pic)shareReceipt(sl);else sendReceiptText(sl);return}
   if(a==='wacust'){const c=custs.find(x=>x.id===id);if(!c)return;const bl=balOf(c.id),txt='Hello '+c.name+', this is '+C.name+'. '+(bl>0.004?'Your balance with us is '+money(bl)+'. Kindly pay when you can. Thank you.':'Thank you for shopping with us.');if(!waOpen(c.phone,txt))toast('Add a phone number for this customer first','warn');return}
   if(a==='contact'){const root=b.closest('.modal')||document,n=b.dataset.n?root.querySelector(b.dataset.n):null,p=root.querySelector(b.dataset.p);navigator.contacts.select(['name','tel'],{multiple:false}).then(r=>{const c=r&&r[0];if(!c)return;const set=(el,v)=>{if(el&&v){el.value=v;el.dispatchEvent(new Event('change',{bubbles:true}))}};set(n,(c.name&&c.name[0])||'');set(p,(c.tel&&c.tel[0])||'')}).catch(()=>{});return}
   if(a==='trrestore'){const t=(trashItems||[]).find(x=>x.id===id);if(!t)return;return ask(t.kind==='receipt'?'Restore this receipt? The sale comes back and its items are taken out of stock again.':'Restore "'+t.label+'"?',async()=>{

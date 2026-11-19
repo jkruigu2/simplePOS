@@ -18,7 +18,7 @@ const Company = mongoose.model('Company', new mongoose.Schema(
   { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String, cur: String, fields: { type: Array, default: [] }, v: { type: Object, default: {} }, rcpt: { type: Object, default: {} }, rh: String, renc: String, sub: { type: Object }, created: Number }, { versionKey: false }));
 const User = M('User', { user: String, name: String, role: String, h: String });
 const Branch = M('Branch', { name: String, loc: String });
-const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund'), Lay = M('Lay'), Ledger = M('Ledger'), Cust = M('Cust'), Trf = M('Trf'), Counter = M('Counter'), Trash = M('Trash'), Photo = M('Photo');
+const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund'), Lay = M('Lay'), Ledger = M('Ledger'), Cust = M('Cust'), Trf = M('Trf'), Counter = M('Counter'), Trash = M('Trash'), Photo = M('Photo'), OpLog = M('OpLog');
 const DATA = [Cat, Prod, Sale, Expense, Move, Log, Refund, Lay, Ledger];   // everything that belongs to one branch (has a `br` field)
 
 // ---------- helpers ----------
@@ -89,12 +89,14 @@ async function trashPut(q, Mo, docs) {   // nothing is thrown away at once: it w
   const at = Date.now();
   await Trash.insertMany(docs.slice(0, 2000).map(({ _id, ...d }) => ({ id: uid(), co: q.u.co, br: d.br || '', kind: TKIND[Mo.modelName], label: tLabel(Mo.modelName, d), doc: d, by: q.u.name, at, expireAt: new Date(at + 30 * 864e5) })), { ordered: false }).catch(() => {});
 }
-const replaceAll = async (Mo, q, a) => {
-  try { await trashPut(q, Mo, await Mo.find({ ...scope(q), id: { $nin: a.map(x => x.id) } }).lean()); } catch (e) {}
-  return Mo.bulkWrite([
-  { deleteMany: { filter: { ...scope(q), id: { $nin: a.map(x => x.id) } } } },
-  ...a.map(x => ({ replaceOne: { filter: { co: q.u.co, id: x.id }, replacement: x, upsert: true } }))]);
-};
+const upsertMany = (Mo, q, a) => a.length ? Mo.bulkWrite(a.map(x => ({ replaceOne: { filter: { co: q.u.co, id: x.id }, replacement: x, upsert: true } })), { ordered: false }) : null;   // adds or changes only what was sent; never deletes
+async function onceOp(q, fn) {   // a request that carries ?op=<id> is applied only once, even if the phone sends it again after a bad connection
+  const op = String(q.query.op || '').slice(0, 40);
+  if (!op) return fn();
+  try { await OpLog.create({ co: q.u.co, id: op, at: Date.now(), expireAt: new Date(Date.now() + 2 * 864e5) }); }
+  catch (e) { if (e.code === 11000 || /E11000/.test(String(e.message))) return; throw e; }
+  try { return await fn(); } catch (e) { await OpLog.deleteOne({ co: q.u.co, id: op }).catch(() => {}); throw e; }
+}
 
 // ---------- change counters (devices poll /api/ver and only fetch what changed) ----------
 const VKEY = { '/api/sales': 'sales', '/api/moves': 'moves', '/api/logs': 'logs', '/api/rets': 'rets', '/api/prods': 'prods', '/api/cats': 'cats', '/api/expenses': 'expenses', '/api/custs': 'custs', '/api/lays': 'lays', '/api/ledger': 'ledger' };
@@ -105,6 +107,7 @@ app.use('/api', (q, s, n) => {
       if (s.statusCode >= 400 || !q.u) return;
       let ks = [];
       if (m === 'PUT' && VKEY[p]) ks = [VKEY[p]];
+      else if (m === 'DELETE' && /^\/api\/(prods|cats|expenses)\//.test(p)) ks = [p.split('/')[2]];
       else if (p.startsWith('/api/sales/')) ks = ['salesx'];
       else if (p.startsWith('/api/trash')) ks = ['prods', 'cats', 'expenses', 'salesx'];
       else if (p.startsWith('/api/photo/')) ks = ['photos'];
@@ -212,15 +215,35 @@ app.get('/api/monthly', auth, need('admin', 'manager'), wrap(async (q, s) => {  
   s.json({ months: rows.map(r => ({ m: r._id - 1, n: r.n, rev: r.rev, profit: r.profit })) });
 }));
 app.put('/api/cats', auth, need('admin', 'manager'), wrap(async (q, s) => {
-  await replaceAll(Cat, q, clean(q.body, q)); s.json({ ok: 1 });
+  await upsertMany(Cat, q, clean(q.body, q)); s.json({ ok: 1 });
 }));
+// Products: each device sends only the products it changed. Stock arrives as "what the device last saw" (_bs) + its new number, so the server
+// adds only the DIFFERENCE: a sale on one phone and a restock on another both count. Serial numbers arrive as added (_sa) / removed (_sr).
 app.put('/api/prods', auth, wrap(async (q, s) => {
-  const co = q.u.co, a = clean(q.body, q);
-  if (q.u.role === 'cashier') {            // cashiers may only change stock levels
-    if (a.length) await Prod.bulkWrite(a.map(x => ({ updateOne: { filter: { ...scope(q), id: x.id }, update: { $set: { stock: Number(x.stock) || 0 } } } })));
-  } else await replaceAll(Prod, q, a);
+  await onceOp(q, async () => {
+    const co = q.u.co, a = clean(q.body, q), cashier = q.u.role === 'cashier', n = v => Number(v) || 0;
+    const have = new Map((await Prod.find({ ...scope(q), id: { $in: a.map(x => x.id) } }).lean()).map(x => [x.id, x])), ops = [];
+    for (const x of a) {
+      const { _bs, _sa, _sr, ...doc } = x, cur = have.get(x.id), hasBase = _bs !== undefined && _bs !== null && _bs !== '' && !isNaN(Number(_bs));
+      if (!cur) { if (!cashier) { const { co: c0, id: i0, ...rest } = doc; ops.push({ updateOne: { filter: { co, id: x.id }, update: { $setOnInsert: rest }, upsert: true } }); } continue; }
+      if (cashier) { ops.push({ updateOne: { filter: { co, id: x.id }, update: hasBase ? { $inc: { stock: n(doc.stock) - n(_bs) } } : { $set: { stock: n(doc.stock) } } } }); continue; }   // cashiers may only change stock levels
+      const { co: c1, id: i1, stock, ...rest } = doc, set = { ...rest }, unset = {};
+      for (const k of Object.keys(cur)) if (!['_id', '__v', 'co', 'id', 'stock', 'sns'].includes(k) && !(k in rest)) unset[k] = '';
+      if (Array.isArray(_sa) || Array.isArray(_sr)) { const st = new Set(cur.sns || []); (_sr || []).forEach(v => st.delete(v)); (_sa || []).forEach(v => st.add(v)); set.sns = [...st]; }
+      const upd = { $set: set }; if (Object.keys(unset).length) upd.$unset = unset;
+      if (hasBase) upd.$inc = { stock: n(stock) - n(_bs) }; else set.stock = n(stock);
+      ops.push({ updateOne: { filter: { co, id: x.id }, update: upd } });
+    }
+    if (ops.length) await Prod.bulkWrite(ops, { ordered: false });
+  });
   s.json({ ok: 1 });
 }));
+for (const [path, Mo] of [['prods', Prod], ['cats', Cat], ['expenses', Expense]])   // deleting is always an explicit request, and what is deleted goes to the trash
+  app.delete('/api/' + path + '/:id', auth, need('admin', 'manager'), wrap(async (q, s) => {
+    const d = await Mo.findOne({ ...scope(q), id: q.params.id }).lean();
+    if (d) { await trashPut(q, Mo, [d]); await Mo.deleteOne({ co: q.u.co, id: q.params.id }); }
+    s.json({ ok: 1 });
+  }));
 app.put('/api/sales', auth, wrap(async (q, s) => {   // append-only
   const co = q.u.co, a = clean(q.body, q);
   await insertOnce(Sale, a.map(x => ({ ...x, by: q.u.name, at: Date.now() })));
@@ -294,7 +317,7 @@ app.get('/api/velocity', auth, need('admin', 'manager'), wrap(async (q, s) => {
   s.json({ rows: rows.map(x => ({ pid: x._id, u14: x.u14, u30: x.u30, u60: x.u60, u90: x.u90, last: x.last })), now });
 }));
 app.put('/api/expenses', auth, need('admin', 'manager'), wrap(async (q, s) => {
-  await replaceAll(Expense, q, clean(q.body, q)); s.json({ ok: 1 });
+  await upsertMany(Expense, q, clean(q.body, q)); s.json({ ok: 1 });
 }));
 const append = (path, Mo, roles) => app.put(path, auth, need(...roles), wrap(async (q, s) => {   // append-only records
   const co = q.u.co, a = clean(q.body, q);
@@ -585,7 +608,7 @@ app.delete('/api/users/:id', auth, need('admin'), wrap(async (q, s) => {
 }));
 
 const ensureIndexes = () => Promise.all([
-  [Trash, { expireAt: 1 }, { expireAfterSeconds: 0 }], [Trash, { co: 1, at: -1 }, {}], [Photo, { co: 1, id: 1 }, { unique: true }],
+  [OpLog, { expireAt: 1 }, { expireAfterSeconds: 0 }], [OpLog, { co: 1, id: 1 }, { unique: true }], [Trash, { expireAt: 1 }, { expireAfterSeconds: 0 }], [Trash, { co: 1, at: -1 }, {}], [Photo, { co: 1, id: 1 }, { unique: true }],
   ...[Sale, Move, Log, Refund, Ledger, Lay, Cust, Trf].map(Mo => [Mo, { co: 1, id: 1 }, { unique: true }])
 ].map(([Mo, key, opt]) => { try { return Promise.resolve(Mo.collection.createIndex(key, opt)).catch(e => console.log('Index note (' + Mo.modelName + '): ' + e.message)); } catch (e) { return null; } }));   // index problems are logged, never fatal
 app.ensureIndexes = ensureIndexes;   // also used by the Netlify function
