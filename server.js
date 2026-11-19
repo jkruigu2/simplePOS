@@ -18,7 +18,7 @@ const Company = mongoose.model('Company', new mongoose.Schema(
   { code: { type: String, unique: true }, name: String, loc: String, motto: String, phone: String, cur: String, fields: { type: Array, default: [] }, v: { type: Object, default: {} }, rcpt: { type: Object, default: {} }, rh: String, renc: String, sub: { type: Object }, created: Number }, { versionKey: false }));
 const User = M('User', { user: String, name: String, role: String, h: String });
 const Branch = M('Branch', { name: String, loc: String });
-const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund'), Lay = M('Lay'), Ledger = M('Ledger'), Cust = M('Cust'), Trf = M('Trf'), Counter = M('Counter');
+const Cat = M('Cat'), Prod = M('Prod'), Sale = M('Sale'), Expense = M('Expense'), Move = M('Move'), Log = M('Log'), Refund = M('Refund'), Lay = M('Lay'), Ledger = M('Ledger'), Cust = M('Cust'), Trf = M('Trf'), Counter = M('Counter'), Trash = M('Trash'), Photo = M('Photo');
 const DATA = [Cat, Prod, Sale, Expense, Move, Log, Refund, Lay, Ledger];   // everything that belongs to one branch (has a `br` field)
 
 // ---------- helpers ----------
@@ -82,9 +82,19 @@ async function auth(q, s, n) {
 }
 const authNoSub = (q, s, n) => { q.noSub = true; return auth(q, s, n); };
 const need = (...r) => (q, s, n) => r.includes(q.u.role) ? n() : s.status(403).json({ error: 'Not allowed for your role' });
-const replaceAll = (Mo, q, a) => Mo.bulkWrite([
+const TKIND = { Cat: 'cat', Prod: 'product', Expense: 'expense', Sale: 'receipt' };
+const tLabel = (n, d) => n === 'Prod' ? String(d.name || 'Product') : n === 'Cat' ? String(d.name || 'Category') : n === 'Expense' ? String(d.cat || 'Expense') + ' · ' + (d.amt || 0) : 'Receipt #' + (d.no || '') + ' · ' + (d.total || 0);
+async function trashPut(q, Mo, docs) {   // nothing is thrown away at once: it waits in the trash for 30 days
+  if (!docs.length) return;
+  const at = Date.now();
+  await Trash.insertMany(docs.slice(0, 2000).map(({ _id, ...d }) => ({ id: uid(), co: q.u.co, br: d.br || '', kind: TKIND[Mo.modelName], label: tLabel(Mo.modelName, d), doc: d, by: q.u.name, at, expireAt: new Date(at + 30 * 864e5) })), { ordered: false }).catch(() => {});
+}
+const replaceAll = async (Mo, q, a) => {
+  try { await trashPut(q, Mo, await Mo.find({ ...scope(q), id: { $nin: a.map(x => x.id) } }).lean()); } catch (e) {}
+  return Mo.bulkWrite([
   { deleteMany: { filter: { ...scope(q), id: { $nin: a.map(x => x.id) } } } },
   ...a.map(x => ({ replaceOne: { filter: { co: q.u.co, id: x.id }, replacement: x, upsert: true } }))]);
+};
 
 // ---------- change counters (devices poll /api/ver and only fetch what changed) ----------
 const VKEY = { '/api/sales': 'sales', '/api/moves': 'moves', '/api/logs': 'logs', '/api/rets': 'rets', '/api/prods': 'prods', '/api/cats': 'cats', '/api/expenses': 'expenses', '/api/custs': 'custs', '/api/lays': 'lays', '/api/ledger': 'ledger' };
@@ -96,6 +106,8 @@ app.use('/api', (q, s, n) => {
       let ks = [];
       if (m === 'PUT' && VKEY[p]) ks = [VKEY[p]];
       else if (p.startsWith('/api/sales/')) ks = ['salesx'];
+      else if (p.startsWith('/api/trash')) ks = ['prods', 'cats', 'expenses', 'salesx'];
+      else if (p.startsWith('/api/photo/')) ks = ['photos'];
       else if (p.startsWith('/api/dupes')) ks = ['salesx'];
       else if (p.startsWith('/api/transfers')) ks = ['prods', 'cats', 'trf', 'moves'];
       else if (p === '/api/restore') ks = ['org', 'salesx', 'prods', 'cats', 'expenses', 'moves', 'logs', 'rets', 'custs', 'lays', 'ledger'];
@@ -233,7 +245,53 @@ app.patch('/api/sales/:id', auth, need('admin', 'manager'), wrap(async (q, s) =>
   await Sale.updateOne({ ...scope(q), id: q.params.id }, { $set: set }); s.json({ ok: 1 });
 }));
 app.delete('/api/sales/:id', auth, need('admin', 'manager'), wrap(async (q, s) => {   // delete receipt
+  const gone = await Sale.findOne({ ...scope(q), id: q.params.id }).lean();
+  if (gone) await trashPut(q, Sale, [gone]);
   await Sale.deleteOne({ ...scope(q), id: q.params.id }); s.json({ ok: 1 });
+}));
+app.get('/api/trash', auth, need('admin', 'manager'), wrap(async (q, s) => s.json({ items: await Trash.find(scope(q)).sort({ at: -1 }).limit(300).select('-_id -doc -expireAt').lean() })));
+app.post('/api/trash/:id/restore', auth, need('admin', 'manager'), wrap(async (q, s) => {
+  const co = q.u.co, t = await Trash.findOne({ ...scope(q), id: q.params.id }).lean();
+  if (!t) fail(404, 'Not found. It may have been emptied.');
+  const Mo = { product: Prod, cat: Cat, expense: Expense, receipt: Sale }[t.kind], d = { ...t.doc, co };
+  if (!Mo) fail(400, 'Unknown item');
+  if (await Mo.findOne({ co, id: d.id }).select('id').lean()) fail(409, 'This item already exists again.');
+  let note = '';
+  if (t.kind === 'product') {
+    if (!(await Cat.findOne({ co, id: d.cat }).select('id').lean())) {
+      const tc = await Trash.findOne({ co, kind: 'cat', 'doc.id': d.cat }).lean();
+      if (tc) { await insertOnce(Cat, [{ ...tc.doc, co }]); await Trash.deleteOne({ co, id: tc.id }); note = 'Its category was restored too.'; }
+      else { const nc = { id: 'rc' + uid(), co, br: d.br, name: 'Restored items', hue: 40 }; await insertOnce(Cat, [nc]); d.cat = nc.id; note = 'Its category no longer exists, so it went into "Restored items".'; }
+    }
+    if (d.code && await Prod.findOne({ co, br: d.br, code: d.code }).select('id').lean()) { d.code = ''; note += (note ? ' ' : '') + 'Its barcode was cleared because another product uses it.'; }
+  }
+  await insertOnce(Mo, [d]); await Trash.deleteOne({ co, id: t.id });
+  s.json({ ok: 1, kind: t.kind, doc: d, note });
+}));
+app.delete('/api/trash/:id', auth, need('admin'), wrap(async (q, s) => { await Trash.deleteOne({ co: q.u.co, id: q.params.id }); s.json({ ok: 1 }); }));
+app.post('/api/trash/empty', auth, need('admin'), wrap(async (q, s) => { const r = await Trash.deleteMany({ co: q.u.co }); s.json({ ok: 1, n: r.deletedCount || 0 }); }));
+// ---------- product photos (a small thumbnail for lists, a bigger picture on tap; kept apart from the product so the product list stays light) ----------
+const imgOk = (x, max) => typeof x === 'string' && x.length <= max && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(x);
+app.get('/api/photos', auth, wrap(async (q, s) => {   // thumbnails changed since a time (a removed photo comes back with an empty thumbnail)
+  const now = Date.now();
+  s.json({ items: await Photo.find({ co: q.u.co, at: { $gt: Number(q.query.since) || 0 } }).select('id th at -_id').limit(3000).lean(), now });
+}));
+app.get('/api/photo/:pid', auth, wrap(async (q, s) => { const p = await Photo.findOne({ co: q.u.co, id: q.params.pid }).select('big th -_id').lean(); s.json({ big: p && (p.big || p.th) || '' }); }));
+app.put('/api/photo/:pid', auth, need('admin', 'manager'), wrap(async (q, s) => {
+  const { th, big } = q.body || {};
+  if (!imgOk(th, 40000) || !imgOk(big, 300000)) fail(400, 'That picture is too big or not a photo.');
+  if (!(await Prod.findOne({ ...scope(q), id: q.params.pid }).select('id').lean())) fail(404, 'Product not found');
+  await Photo.updateOne({ co: q.u.co, id: q.params.pid }, { $set: { th, big, at: Date.now() } }, { upsert: true }); s.json({ ok: 1 });
+}));
+app.delete('/api/photo/:pid', auth, need('admin', 'manager'), wrap(async (q, s) => { await Photo.updateOne({ co: q.u.co, id: q.params.pid }, { $set: { th: '', big: '', at: Date.now() } }); s.json({ ok: 1 }); }));
+// ---------- sales speed per product for the restock list ----------
+app.get('/api/velocity', auth, need('admin', 'manager'), wrap(async (q, s) => {
+  const now = Date.now(), D = 864e5, f = { ...scope(q) };
+  if (q.query.br && q.query.br !== 'all') { if (!okBr(q, q.query.br)) fail(403, 'Not allowed'); f.br = q.query.br; }
+  const u = d => ({ $sum: { $cond: [{ $gte: ['$ts', now - d * D] }, '$items.qty', 0] } });
+  const rows = await Sale.aggregate([{ $match: { ...f, ts: { $gte: now - 90 * D } } }, { $group: { _id: '$id', ts: { $first: '$ts' }, items: { $first: '$items' } } }, { $unwind: '$items' },
+    { $group: { _id: '$items.id', u14: u(14), u30: u(30), u60: u(60), u90: { $sum: '$items.qty' }, last: { $max: '$ts' } } }]);
+  s.json({ rows: rows.map(x => ({ pid: x._id, u14: x.u14, u30: x.u30, u60: x.u60, u90: x.u90, last: x.last })), now });
 }));
 app.put('/api/expenses', auth, need('admin', 'manager'), wrap(async (q, s) => {
   await replaceAll(Expense, q, clean(q.body, q)); s.json({ ok: 1 });
@@ -526,7 +584,7 @@ app.delete('/api/users/:id', auth, need('admin'), wrap(async (q, s) => {
   await User.deleteOne({ co: q.u.co, id: q.params.id }); s.json({ ok: 1 });
 }));
 
-const ensureIndexes = () => Promise.all([Sale, Move, Log, Refund, Ledger, Lay, Cust, Trf].map(Mo => Mo.collection.createIndex({ co: 1, id: 1 }, { unique: true }).catch(e => console.log('Index note (' + Mo.modelName + '): ' + e.message))));
+const ensureIndexes = () => Promise.all([Trash.collection.createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 }).catch(() => {}), Trash.collection.createIndex({ co: 1, at: -1 }).catch(() => {}), Photo.collection.createIndex({ co: 1, id: 1 }, { unique: true }).catch(() => {}), Sale, Move, Log, Refund, Ledger, Lay, Cust, Trf].map(Mo => Mo.collection.createIndex({ co: 1, id: 1 }, { unique: true }).catch(e => console.log('Index note (' + Mo.modelName + '): ' + e.message))));
 app.ensureIndexes = ensureIndexes;   // also used by the Netlify function
 module.exports = app;   // used by the Netlify function
 
