@@ -6,7 +6,7 @@ const run = serverless(app);
 let conn;   // reuse the database connection between requests
 const connect = () => conn || (conn = mongoose
   .connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 })
-  .then(r => { if (app.ensureIndexes) app.ensureIndexes(); return r; })   // fail fast instead of hanging
+  .then(r => { try { if (app.ensureIndexes) app.ensureIndexes(); } catch (e) { console.log('Index setup skipped: ' + e.message); } return r; })   // fail fast instead of hanging
   .catch(e => { conn = null; throw e; }));
 
 exports.handler = async (event, context) => {

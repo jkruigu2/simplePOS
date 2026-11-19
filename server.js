@@ -584,13 +584,16 @@ app.delete('/api/users/:id', auth, need('admin'), wrap(async (q, s) => {
   await User.deleteOne({ co: q.u.co, id: q.params.id }); s.json({ ok: 1 });
 }));
 
-const ensureIndexes = () => Promise.all([Trash.collection.createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 }).catch(() => {}), Trash.collection.createIndex({ co: 1, at: -1 }).catch(() => {}), Photo.collection.createIndex({ co: 1, id: 1 }, { unique: true }).catch(() => {}), Sale, Move, Log, Refund, Ledger, Lay, Cust, Trf].map(Mo => Mo.collection.createIndex({ co: 1, id: 1 }, { unique: true }).catch(e => console.log('Index note (' + Mo.modelName + '): ' + e.message))));
+const ensureIndexes = () => Promise.all([
+  [Trash, { expireAt: 1 }, { expireAfterSeconds: 0 }], [Trash, { co: 1, at: -1 }, {}], [Photo, { co: 1, id: 1 }, { unique: true }],
+  ...[Sale, Move, Log, Refund, Ledger, Lay, Cust, Trf].map(Mo => [Mo, { co: 1, id: 1 }, { unique: true }])
+].map(([Mo, key, opt]) => { try { return Promise.resolve(Mo.collection.createIndex(key, opt)).catch(e => console.log('Index note (' + Mo.modelName + '): ' + e.message)); } catch (e) { return null; } }));   // index problems are logged, never fatal
 app.ensureIndexes = ensureIndexes;   // also used by the Netlify function
 module.exports = app;   // used by the Netlify function
 
 if (require.main === module) {   // normal `npm start` (Render, Railway, local)
   if (!SECRET || !process.env.MONGODB_URI) { console.error('Set MONGODB_URI and JWT_SECRET in .env'); process.exit(1); }
   mongoose.connect(process.env.MONGODB_URI)
-    .then(() => { ensureIndexes(); return app.listen(process.env.PORT || 3000, () => console.log('POS running on port ' + (process.env.PORT || 3000))); })
+    .then(() => { try { ensureIndexes(); } catch (e) {} return app.listen(process.env.PORT || 3000, () => console.log('POS running on port ' + (process.env.PORT || 3000))); })
     .catch(e => { console.error(e.message); process.exit(1); });
 }
