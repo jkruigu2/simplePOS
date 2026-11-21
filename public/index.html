@@ -112,6 +112,14 @@ tr.exm td{opacity:.5}
 @page{margin:2mm}
 @media print{body *{visibility:hidden}.modal,.receipt,.receipt *{visibility:visible}.modal{position:absolute;background:none;padding:0;display:block}.receipt{border:0;max-width:none;box-shadow:none;margin:0;padding:1mm;overflow:visible}.noprint{display:none!important}.ld{display:none}}
 
+/* ===== bulk restock ===== */
+.bulk{max-height:92vh;display:flex;flex-direction:column}
+.blist{overflow:auto;flex:1;min-height:160px;border-top:1px solid var(--bd)}
+.bh,.brow{display:grid;grid-template-columns:1fr 78px 92px;gap:8px;align-items:center}
+.bh{font-size:calc(12px*var(--fs,1));text-transform:uppercase;letter-spacing:.05em;color:var(--mut);padding:2px 0}
+.brow{padding:8px 0;border-bottom:1px solid var(--bd)}.brow input{margin:0;height:40px;text-align:right}
+.bn{min-width:0}.bn b{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;line-height:1.25}.bn small{display:block}
+.bsum{font-weight:600;padding:8px 10px;border-radius:10px;background:var(--soft)}
 /* ===== loading, sale complete, refresh ===== */
 .splash{position:fixed;inset:0;z-index:500;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;transition:opacity .25s}.splash.out{opacity:0}
 .spin.dk{border-color:var(--bd);border-top-color:var(--pri)}
@@ -360,7 +368,7 @@ document.addEventListener('click',e=>{
   const pn=e.target.closest('[data-pgn]');
   if(pn){const t=pn.closest('.pgr')._t,st=stOf(tkey(t));st.p+=+pn.dataset.pgn;saveTS();applyT(t)}
 });
-document.addEventListener('input',e=>{const t=e.target;if(!t.classList||!t.classList.contains('tsrch'))return;const tb=t.closest('.tb'),tt=tb._t;TQ[tkey(tt)]=t.value;stOf(tkey(tt)).p=1;applyT(tt)});
+document.addEventListener('input',e=>{const t=e.target;if((t.dataset&&(t.dataset.bq!==undefined||t.dataset.bb!==undefined))||t.id==='bnote'||(t.classList&&t.classList.contains('bsrch'))){bulkInput(t);return}if(!t.classList||!t.classList.contains('tsrch'))return;const tb=t.closest('.tb'),tt=tb._t;TQ[tkey(tt)]=t.value;stOf(tkey(tt)).p=1;applyT(tt)});
 document.addEventListener('change',e=>{const c=e.target.dataset.col;if(c==null)return;const t=e.target.closest('.tb')._t,st=stOf(tkey(t)),i=+c;st.h=e.target.checked?st.h.filter(x=>x!==i):[...st.h,i];saveTS();applyT(t)});
 ['click','keydown','touchstart','pointerdown'].forEach(ev=>document.addEventListener(ev,()=>{lastAct=Date.now()},{passive:true,capture:true}));
 setInterval(()=>{const c=lockCfg();if(U&&!lk&&c&&c.mins&&Date.now()-lastAct>c.mins*60000){lk=true;render()}},5000);
@@ -711,8 +719,20 @@ function restockView(){
   return `<div class="card"><div class="row" style="justify-content:flex-end;margin-bottom:4px"><button class="pri" data-act="rsshare" ${R.length?'':'disabled'}>💬 Share list</button></div><small class="mut">What to buy first, worked out from your own sales: how fast it sells (recent weeks count most), whether it is speeding up, days of stock left, profit per item and when it last sold. This is a calculation on your numbers, not a chatbot.${fromSrv?'':' Using the last 35 days saved on this device.'}</small>
   <div class="gh2">Stock should last</div><div class="chips" style="--h:165">${[14,21,30,45].map(v=>chip(v,rsCover,'rscover')).join('')}</div>
   <div class="gh2">Supplier delivery time</div><div class="chips" style="--h:165">${[3,7,14].map(v=>chip(v,rsLead,'rslead')).join('')}</div>
-  <div class="row" style="gap:8px;margin-top:6px"><select data-change="rscat"><option value="">All categories</option>${bmine(cats).map(c=>`<option value="${c.id}" ${rsCat===c.id?'selected':''}>${esc(tc(c.name))}</option>`).join('')}</select><label class="chk" style="white-space:nowrap;margin:0"><input type="checkbox" ${rsAll?'checked':''} data-act="rsall"> Show items with enough stock</label></div></div>
-  <div class="card"><div class="tblw">${R.length?`<table><tr><th>Product</th><th class="r">In stock</th><th class="r">Order</th><th class="r">Est. cost</th><th>Chance to sell</th></tr>${R.map(x=>`<tr class="cr" style="--h:${hueOf(x.p.cat)}"><td style="white-space:normal;min-width:170px">${pimg(x.p)}<b>${esc(dn(x.p))}</b><div class="rsn">${esc(x.why.join(' · '))}</div></td><td class="r ${x.p.stock<1?'out':''}">${nf(x.p.stock)}</td><td class="r"><b>${nf(x.need)}</b></td><td class="r">${money(x.need*x.p.buy)}</td><td><div class="meter"><i style="width:${x.likely}%"></i></div> ${x.likely}</td></tr>`).join('')}<tfoot><tr><td>Estimated total</td><td></td><td></td><td class="r">${money(tot)}</td><td></td></tr></tfoot></table>`:'<p>Nothing needs restocking with these settings, or there are no sales to learn from yet.</p>'}</div></div>`}
+  <div class="row" style="gap:8px;margin-top:6px"><select data-change="rscat"><option value="">All categories</option>${bmine(cats).map(c=>`<option value="${c.id}" ${rsCat===c.id?'selected':''}>${esc(tc(c.name))}</option>`).join('')}</select><label class="chk" style="white-space:nowrap;margin:0"><input type="checkbox" ${rsAll?'checked':''} data-act="rsall"> Show items with enough stock</label></div><div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap"><button data-act="rsselall">Select all</button><button class="pri" data-act="bulkopen" data-from="rs" ${rsSel.size?'':'disabled'}>Restock selected (${rsSel.size})</button></div></div>
+  <div class="card"><div class="tblw">${R.length?`<table><tr><th></th><th>Product</th><th class="r">In stock</th><th class="r">Order</th><th class="r">Est. cost</th><th>Chance to sell</th></tr>${R.map(x=>`<tr class="cr" style="--h:${hueOf(x.p.cat)}"><td style="width:30px">${x.p.ser?'':`<input type="checkbox" data-act="rssel" data-id="${x.p.id}" ${rsSel.has(x.p.id)?'checked':''} aria-label="Select">`}</td><td style="white-space:normal;min-width:170px">${pimg(x.p)}<b>${esc(dn(x.p))}</b><div class="rsn">${esc(x.why.join(' · '))}</div></td><td class="r ${x.p.stock<1?'out':''}">${nf(x.p.stock)}</td><td class="r"><b>${nf(x.need)}</b></td><td class="r">${money(x.need*x.p.buy)}</td><td><div class="meter"><i style="width:${x.likely}%"></i></div> ${x.likely}</td></tr>`).join('')}<tfoot><tr><td></td><td>Estimated total</td><td></td><td></td><td class="r">${money(tot)}</td><td></td></tr></tfoot></table>`:'<p>Nothing needs restocking with these settings, or there are no sales to learn from yet.</p>'}</div></div>`}
+// ---- restock several products at once ----
+let bulkQ={},bulkB={},bulkS='',bulkCat='',bulkF='all',bulkNote='';const rsSel=new Set();
+const bulkRows=()=>bact().filter(p=>!p.ser).sort((a,b)=>dn(a).localeCompare(dn(b)));
+function bulkVisible(p){const q=bulkS.trim().toLowerCase();return(!bulkCat||p.cat===bulkCat)&&(!q||dn(p).toLowerCase().includes(q)||String(p.code||'').toLowerCase().includes(q))&&(bulkF==='all'||(bulkF==='low'&&p.stock<=lowN)||(bulkF==='qty'&&+bulkQ[p.id]>0))}
+const bulkBuy=p=>{const b=bulkB[p.id];return b!==undefined&&b!==''&&!isNaN(+b)&&+b>=0?+b:p.buy};
+function bulkTotals(){let n=0,u=0,c=0;bulkRows().forEach(p=>{const q=parseInt(bulkQ[p.id]);if(q>0){n++;u+=q;c+=q*bulkBuy(p)}});return{n,u,c}}
+const bulkSumText=()=>{const t=bulkTotals();return t.n?`${t.n} product${t.n===1?'':'s'} · ${nf(t.u)} units · cost ${money(t.c)}`:'Enter a quantity next to the products you are restocking'};
+function bulkSum(){const e=document.getElementById('bsum');if(e)e.textContent=bulkSumText();const g=document.getElementById('bgo');if(g)g.disabled=!bulkTotals().n}
+function bulkApplyFilter(){const m=new Map(bulkRows().map(p=>[p.id,p]));document.querySelectorAll('.brow').forEach(r=>{const p=m.get(r.dataset.pid);r.style.display=p&&bulkVisible(p)?'':'none'});const e=document.getElementById('bcount');if(e)e.textContent=bulkRows().filter(bulkVisible).length+' shown'}
+function bulkInput(t){if(t.dataset.bq!==undefined)bulkQ[t.dataset.bq]=t.value;else if(t.dataset.bb!==undefined)bulkB[t.dataset.bb]=t.value;else if(t.id==='bnote')bulkNote=t.value;else{bulkS=t.value;bulkApplyFilter();return}bulkSum()}
+function bulkFocus(){const a=document.activeElement;if(!a||!a.dataset)return null;if(a.dataset.bq!==undefined)return['[data-bq="'+a.dataset.bq+'"]',a.selectionStart];if(a.dataset.bb!==undefined)return['[data-bb="'+a.dataset.bb+'"]',a.selectionStart];if(a.id==='bnote')return['#bnote',a.selectionStart];if(a.classList.contains('bsrch'))return['.bsrch',a.selectionStart];return null}
+function bulkRefocus(f){const e=document.querySelector(f[0]);if(e){e.focus();try{e.setSelectionRange(f[1],f[1])}catch(x){}}}
 const EXC=['Rent','Transport','Salaries','Utilities','Supplies','Marketing','Other'];
 const PWF=n=>`<div class="pw"><input name="${n}" type="${showpw?'text':'password'}" data-pw minlength="4" required><button type="button" data-act="showpw" aria-label="Show or hide password">${showpw?EYEOFF:EYE}</button></div>`;
 const rfOf=id=>bmine(rets).filter(x=>x.sid===id).reduce((a,e)=>a+e.amt,0);
@@ -757,7 +777,8 @@ function render(){
   if(needUnlock){needUnlock=false;if(lockCfg())lk=true}
   if(!curBr||(curBr!=='all'&&!allowedBr().includes(curBr))||(curBr==='all'&&allowedBr().length<2))pickBr();
   if(!can(tab))tab='sell';
-  $('#app').innerHTML=shell()+(dr?drawerView():'')+(doneSale?doneView():'')+(md?mdView():'')+(rc?receiptModal():'')+(sheet?sheetView():'')+(ckBusy?`<div class="ld"><div class="spin"></div>${esc(ckMsg)}</div>`:'')+(lk?lockView():'');enhance();if(lk){const pi=document.querySelector('.lock input');if(pi)pi.focus()}syncNeeds();freshKey=freshK();
+  const bf=md==='bulk'?bulkFocus():null;
+  $('#app').innerHTML=shell()+(dr?drawerView():'')+(doneSale?doneView():'')+(md?mdView():'')+(rc?receiptModal():'')+(sheet?sheetView():'')+(ckBusy?`<div class="ld"><div class="spin"></div>${esc(ckMsg)}</div>`:'')+(lk?lockView():'');enhance();if(bf)bulkRefocus(bf);if(lk){const pi=document.querySelector('.lock input');if(pi)pi.focus()}syncNeeds();freshKey=freshK();
 }
 function authView(){
   const reg=mode==='reg',rs=mode==='reset';
@@ -895,7 +916,7 @@ function prodView(){
 }
 function stockView(){
   const P=bact(),a=pager('stock',P.length);
-  return `<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Stock levels</h2><span>${acts('<button class="pri" data-act="open" data-id="stock" '+(P.length?'':'disabled')+'>+ Add stock</button>','Stock',[{l:'Count sheet',a:'open',id:'cnt'}])}</span></div><div class="tblw">${P.length?`<table><tr><th>Product</th><th>Barcode</th>${xth('prod')}<th class="r">Stock</th><th></th></tr>${P.slice(a.a,a.b).map(p=>`<tr class="cr" style="--h:${hueOf(p.cat)}"><td>${pimg(p)}${esc(dn(p))}</td><td>${esc(p.code||'—')}</td>${xtd('prod',p)}<td class="r ${p.stock<1?'out':p.stock<=5?'low':''}">${nf(p.stock)}</td><td class="r" style="white-space:nowrap">${acts(`<button data-act="open" data-id="stock" data-x="${p.id}">+ Stock</button>`,dn(p),[can('history')&&{l:'Edit stock number',a:'open',id:p.ser?'snedit':'adj',x:p.id}])}</td></tr>`).join('')}</table>`:'<p class="mut">No products yet.</p>'}</div>${a.html}</div>`;
+  return `<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Stock levels</h2><span>${acts('<button class="pri" data-act="open" data-id="stock" '+(P.length?'':'disabled')+'>+ Add stock</button> <button data-act="bulkopen">Bulk restock</button>','Stock',[{l:'Count sheet',a:'open',id:'cnt'}])}</span></div><div class="tblw">${P.length?`<table><tr><th>Product</th><th>Barcode</th>${xth('prod')}<th class="r">Stock</th><th></th></tr>${P.slice(a.a,a.b).map(p=>`<tr class="cr" style="--h:${hueOf(p.cat)}"><td>${pimg(p)}${esc(dn(p))}</td><td>${esc(p.code||'—')}</td>${xtd('prod',p)}<td class="r ${p.stock<1?'out':p.stock<=5?'low':''}">${nf(p.stock)}</td><td class="r" style="white-space:nowrap">${acts(`<button data-act="open" data-id="stock" data-x="${p.id}">+ Stock</button>`,dn(p),[can('history')&&{l:'Edit stock number',a:'open',id:p.ser?'snedit':'adj',x:p.id}])}</td></tr>`).join('')}</table>`:'<p class="mut">No products yet.</p>'}</div>${a.html}</div>`;
 }
 function chart(days){
   const W=340,H=170,pad=8,top=22,mx=Math.max(1,...days.map(d=>d.rev)),g=(W-pad*2)/days.length,bw=13,h=H-top-24;
@@ -956,6 +977,16 @@ function mdView(){
     <label class="chk"><input type="checkbox" ${PF('pos3_hap','1')==='1'?'checked':''} data-act="thap"> Vibrate on taps, scans, warnings and finished sales</label>
     <div class="gh2">After checkout</div><div class="chips" style="--h:165">${[['done','Sale complete screen'],['rcpt','Open the receipt']].map(([v,l])=>`<button class="chip ${ao===v?'on':''}" data-act="after" data-id="${v}">${l}</button>`).join('')}</div>
     <small class="mut" style="display:block;margin-top:10px">These settings are for this phone. Vibration works on Android phones.</small></div></div>`}
+  if(md==='bulk'){const rows=bulkRows(),cl=bmine(cats);
+    return `<div class="modal"><div class="card bulk" style="width:100%;max-width:560px"><div class="row" style="margin-bottom:8px"><h2 style="margin:0">Restock in bulk</h2><button data-act="closem">✕</button></div>
+    <div class="row" style="gap:8px;margin-bottom:8px"><input class="bsrch" type="search" placeholder="Search name or barcode…" value="${esc(bulkS)}" style="margin:0;flex:1"><select data-change="bcat" style="width:auto;max-width:42%;margin:0"><option value="">All categories</option>${cl.map(c=>`<option value="${c.id}" ${bulkCat===c.id?'selected':''}>${esc(tc(c.name))}</option>`).join('')}</select></div>
+    <div class="chips" style="--h:165;margin:0 0 6px">${[['all','All'],['low','Low stock'],['qty','With quantity']].map(([v,l])=>`<button class="chip ${bulkF===v?'on':''}" data-act="bfilter" data-id="${v}">${l}</button>`).join('')}<small class="mut" id="bcount" style="align-self:center;margin-left:auto">${rows.filter(bulkVisible).length} shown</small></div>
+    <div class="bh"><span>Product</span><span>Add qty</span><span>Buy price</span></div>
+    <div class="blist">${rows.length?rows.map(p=>`<div class="brow" data-pid="${p.id}" style="${bulkVisible(p)?'':'display:none'}"><div class="bn">${pimg(p)}<b>${esc(dn(p))}</b><small class="mut">In stock ${nf(p.stock)}${p.stock<=lowN?' · low':''}</small></div><input type="number" inputmode="numeric" min="0" step="1" placeholder="0" data-bq="${p.id}" value="${esc(String(bulkQ[p.id]||''))}"><input type="number" inputmode="decimal" min="0" step="any" data-bb="${p.id}" value="${esc(String(bulkB[p.id]!==undefined?bulkB[p.id]:p.buy))}"></div>`).join(''):'<p class="mut">No products to restock here.</p>'}</div>
+    <small class="mut" style="display:block;margin:6px 0">Items tracked by serial number / IMEI (phones) are added one at a time with <b>+ Stock</b>.</small>
+    <input id="bnote" placeholder="Supplier or invoice number (optional)" value="${esc(bulkNote)}" style="margin:6px 0">
+    <div id="bsum" class="bsum">${bulkSumText()}</div>
+    <div class="row" style="margin-top:8px"><button data-act="closem">Cancel</button><button class="pri" id="bgo" data-act="bulkgo" ${bulkTotals().n?'':'disabled'}>Add stock</button></div></div></div>`}
   if(md==='pphoto'){const p=prods.find(x=>x.id===mdx);if(!p)return '';const src=PHB[p.id]||PH[p.id]||'';
     return `<div class="modal"><div class="card" style="width:100%;max-width:420px"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Photo · ${esc(tc(p.name))}</h2><button data-act="closem">✕</button></div><div class="phbox">${src?`<img src="${src}" alt="">`:'<span class="mut">No photo yet</span>'}</div><div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap;justify-content:flex-start"><label class="btnlike"><input type="file" accept="image/*" capture="environment" data-change="pfile" data-id="${p.id}" hidden>📷 Take photo</label><label class="btnlike"><input type="file" accept="image/*" data-change="pfile" data-id="${p.id}" hidden>🖼 Choose</label>${PH[p.id]?`<button class="del" data-act="pdel" data-id="${p.id}">Remove</button>`:''}</div><small class="mut" style="display:block;margin-top:8px">Needs internet. The picture is shrunk to a small size so the app stays quick.</small></div></div>`}
   if(md==='pzoom'){const p=prods.find(x=>x.id===mdx);if(!p)return '';const src=PHB[p.id]||PH[p.id]||'';return `<div class="modal" data-act="closem"><div style="max-width:92vw;text-align:center"><img class="zoom" src="${src}" alt=""><div style="margin-top:8px;color:#fff;font-weight:600">${esc(dn(p))}</div></div></div>`}
@@ -1161,6 +1192,7 @@ document.addEventListener('change',e=>{
   const t=e.target,c=t.dataset.change,id=t.dataset.id;if(!c)return;
   if(c==='pfile'){photoPick(t);return}
   if(c==='rscat'){rsCat=t.value;render();return}
+  if(c==='bcat'){bulkCat=t.value;bulkApplyFilter();return}
   if(c==='cu'&&t.id==='cn'){const m=custs.find(x=>x.name.toLowerCase()===t.value.trim().toLowerCase()),cp=$('#cp');if(m&&m.phone&&cp&&!cp.value){cp.value=m.phone;cp.dispatchEvent(new Event('change',{bubbles:true}))}}
   if(c==='paid'){paid=t.value;return}
   if(c==='rlogo'){readLogo(t.files&&t.files[0]);return}
@@ -1323,6 +1355,20 @@ document.addEventListener('click',e=>{
     trashItems=null;audit('Restored from trash',t.label);toast('Restored'+(r.note?'. '+r.note:''))})}
   if(a==='trdel'&&can('users'))return ask('Delete this for good? It cannot be brought back.',async()=>{await api('DELETE','/api/trash/'+id);trashItems=(trashItems||[]).filter(x=>x.id!==id);toast('Deleted for good')});
   if(a==='trempty'&&can('users'))return ask('Empty the whole trash bin? Everything in it is deleted for good.',async()=>{await api('POST','/api/trash/empty');trashItems=[];audit('Trash emptied','');toast('Trash emptied')});
+  if(a==='rssel'){if(rsSel.has(id))rsSel.delete(id);else rsSel.add(id)}
+  if(a==='rsselall'){const L=restockRows().filter(x=>!x.p.ser),all=L.length&&L.every(x=>rsSel.has(x.p.id));L.forEach(x=>{if(all)rsSel.delete(x.p.id);else rsSel.add(x.p.id)})}
+  if(a==='bulkopen'&&can('stock')){bulkQ={};bulkB={};bulkS='';bulkCat='';bulkNote='';bulkF='all';
+    if(b.dataset.from==='rs'){restockRows().filter(x=>rsSel.has(x.p.id)&&!x.p.ser).forEach(x=>{bulkQ[x.p.id]=String(Math.max(1,x.need))});bulkF='qty'}
+    dr=false;md='bulk'}
+  if(a==='bfilter')bulkF=id;
+  if(a==='bulkgo'&&can('stock')){const items=bulkRows().map(p=>({p,q:parseInt(bulkQ[p.id])||0})).filter(x=>x.q>0);
+    if(!items.length)return toast('Enter a quantity for at least one product','warn');
+    const T=bulkTotals();
+    return ask('Add '+nf(T.u)+' units across '+T.n+' product'+(T.n===1?'':'s')+' (cost '+money(T.c)+')?',()=>{
+      const ms=[],note=(bulkNote||'').trim();
+      items.forEach(({p,q})=>{const nb=bulkBuy(p);if(nb!==p.buy){ph(p,'buy',p.buy,nb);p.buy=nb}p.stock+=q;ms.push(mv(p,q,'add','Bulk restock',note))});
+      save(K.p,prods);rec('moves',ms);audit('Bulk restock',T.n+' products, +'+T.u+' units'+(note?' · '+note:''));
+      md=null;bulkQ={};bulkB={};bulkNote='';rsSel.clear();haptic('ok');toast('Stock added to '+T.n+' product'+(T.n===1?'':'s')+' (+'+nf(T.u)+' units)')})}
   if(a==='rscover')rsCover=+id;
   if(a==='rslead')rsLead=+id;
   if(a==='rsall')rsAll=!rsAll;
